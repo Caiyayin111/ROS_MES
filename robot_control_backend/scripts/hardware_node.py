@@ -27,6 +27,9 @@ from robot_control_backend.msg import (
     AxisFault,
     LimitEvent,
     VacuumLoss,
+    UidAnnounce,
+    SegAssign,
+    SegConfirm,
 )
 
 
@@ -57,6 +60,14 @@ class CANBusBridge:
     SUB_MODULE_STOP = 0x08
     SUB_AXIS_STOP = 0x0C
 
+    # ===== 会话式模块确认（领号段，独立协议，不走 V2 位域分派）=====
+    UID_FRAME_BASE = 0x15BC0000        # 领号段基址（掩码匹配 0x15BC00xx）
+    UID_FRAME_MASK = 0x1FFFFF00
+    UID_ASSIGN_ID = 0x15BC0010         # 分配应答（下行）
+    UID_CONFIRM_ID = 0x15BC0050        # 分配确认（上行）
+    UID_ANNOUNCE_BASE = 0x15BC0080     # 未编号宣告基址（上行，16 槽步长 4）
+    UID_ANNOUNCE_MAX = 0x15BC00BC
+
     # 事件类型编码（写入 can_event_log.event_type）
     EVT_ARRIVE, EVT_STOP, EVT_AXIS_FAULT, EVT_HOME, EVT_LIMIT = 1, 2, 3, 4, 5
     EVT_CMD_ACK, EVT_VACUUM_LOSS, EVT_WDG_WARN, EVT_NODE_FAULT, EVT_BOOT = 6, 7, 8, 9, 10
@@ -82,6 +93,8 @@ class CANBusBridge:
         # V2：单帧相对增量上限（0.01°）与分帧下发周期（秒）
         self.max_delta_centideg = int(os.environ['CAN_MAX_DELTA_CENTIDEG'])
         self.chunk_period = float(os.environ['CAN_CHUNK_PERIOD'])
+        # 发出一帧增量后等待该轴位置反馈的超时（秒），超时视为反馈丢失继续下发
+        self.tx_wait_timeout = float(os.environ['CAN_TX_WAIT_TIMEOUT'])
         # 固件当前不支持回零（下发即返回 Result=3），默认不下发 CAN 帧
         self.home_supported = os.environ['CAN_HOME_SUPPORTED'].lower() == 'true'
 
@@ -93,6 +106,8 @@ class CANBusBridge:
         # 轴号 -> deque[delta_centideg]，相对增量分帧 FIFO（每周期取一帧）
         self.tx_queues = {}
         self.tx_lock = threading.Lock()
+        # 轴号 -> 最近一帧发出时间戳；已发出一帧、正在等待该轴位置反馈的标记
+        self.tx_waiting = {}
         # node -> {time, state, run_mask, base_mask}
         self.node_heartbeats = {}
         self.node_lost = set()
@@ -129,10 +144,16 @@ class CANBusBridge:
             os.environ['ROS_TOPIC_LIMIT_EVENT'], LimitEvent, queue_size=30)
         self.pub_vacuum_loss = rospy.Publisher(
             os.environ['ROS_TOPIC_VACUUM_LOSS'], VacuumLoss, queue_size=30)
+        # 会话式模块确认（领号段桥接）
+        self.pub_uid_announce = rospy.Publisher(
+            os.environ['ROS_TOPIC_UID_ANNOUNCE'], UidAnnounce, queue_size=30)
+        self.pub_seg_confirm = rospy.Publisher(
+            os.environ['ROS_TOPIC_SEG_CONFIRM'], SegConfirm, queue_size=30)
 
         # ---------- 订阅 ----------
         rospy.Subscriber(os.environ['ROS_TOPIC_ARM_CMD_VEL'], IntCmd, self.on_cmd_received)
         rospy.Subscriber(os.environ['ROS_TOPIC_HOME_CMD'], IntCmd, self.on_home_cmd)
+        rospy.Subscriber(os.environ['ROS_TOPIC_SEG_ASSIGN'], SegAssign, self.on_seg_assign)
 
         # ---------- 心跳看门狗 ----------
         # 下位机暂未做心跳机制，看门狗定时器先注释掉（恢复时取消注释即可）
@@ -187,11 +208,15 @@ class CANBusBridge:
             f(self._build_id(self.PRI_MOTION, self.GRP_MOTION_FB, node=self.master_node), cls_mask),
             f(self._build_id(self.PRI_EVENT, self.GRP_EVENT, node=self.master_node), cls_mask),
             f(self._build_id(self.PRI_SENSOR, self.GRP_SENSOR, node=self.master_node), cls_mask),
+            # 会话式模块确认：领号段 0x15BC00xx（未编号宣告 0x80~0xBC + 分配确认 0x50）
+            f(self.UID_FRAME_BASE, self.UID_FRAME_MASK | rtr_mask),
         ]
 
     def _connect_bus(self):
+        # 与台架测试一致：500kbps、仅扩展数据帧（过滤器已排除 RTR/远程帧）
+        # 注意 SocketCAN 的真实波特率由系统层 ip link set can0 type can bitrate 500000 设置
         return can.interface.Bus(
-            channel=self.channel, bustype="socketcan", bitrate=self.bitrate,
+            channel=self.channel, interface="socketcan", bitrate=self.bitrate,
             can_filters=self._make_filters())
 
     def _read_can_loop(self):
@@ -341,36 +366,59 @@ class CANBusBridge:
         return len(chunks)
 
     def _clear_axis_queue(self, axis):
-        """清空指定轴待发的增量分帧"""
+        """清空指定轴待发的增量分帧及等待反馈标记"""
         with self.tx_lock:
             q = self.tx_queues.pop(axis, None)
+            self.tx_waiting.pop(axis, None)
         if q:
             rospy.logwarn("🗑️ 轴%d 待发增量分帧已清空（%d 帧）", axis, len(q))
 
     def _clear_all_queues(self):
-        """清空全部轴待发的增量分帧（急停时调用）"""
+        """清空全部轴待发的增量分帧及等待反馈标记（急停时调用）"""
         with self.tx_lock:
             total = sum(len(q) for q in self.tx_queues.values())
             self.tx_queues.clear()
+            self.tx_waiting.clear()
         if total:
             rospy.logwarn("🗑️ 已清空全部待发增量分帧（%d 帧）", total)
 
-    def _flush_tx_queues(self, event):
-        """每个 CAN_CHUNK_PERIOD 周期，每轴从 FIFO 取一帧相对增量下发（MSG=1）"""
-        pending = []
+    def _try_send_next(self, axis):
+        """若该轴未在等待反馈且队列非空，取队首一帧增量下发（MSG=1），并标记等待反馈"""
         with self.tx_lock:
-            for axis in list(self.tx_queues.keys()):
-                q = self.tx_queues[axis]
-                if q:
-                    pending.append((axis, q.popleft()))
-                if not q:
-                    del self.tx_queues[axis]
-        for axis, delta in pending:
-            can_id = self._build_id(self.PRI_MOTION, self.GRP_MOTION_CMD,
-                                    self.master_node, axis, self.DIR_DOWN, 1)
-            payload = struct.pack('>hH', int(delta), self.default_speed)
-            if self._send_can_frame(can_id, payload):
-                rospy.loginfo("📤 轴%d 相对增量 %+d(0.01°) → 0x%08X", axis, delta, can_id)
+            if axis in self.tx_waiting:
+                return False
+            q = self.tx_queues.get(axis)
+            if not q:
+                return False
+            delta = q.popleft()
+            if not q:
+                del self.tx_queues[axis]
+            self.tx_waiting[axis] = rospy.Time.now().to_sec()
+        can_id = self._build_id(self.PRI_MOTION, self.GRP_MOTION_CMD,
+                                self.master_node, axis, self.DIR_DOWN, 1)
+        payload = struct.pack('>hH', int(delta), self.default_speed)
+        if self._send_can_frame(can_id, payload):
+            rospy.loginfo("📤 轴%d 相对增量 %+d(0.01°) → 0x%08X", axis, delta, can_id)
+            return True
+        # 发送失败：帧放回队首并清除等待标记，下轮重试
+        with self.tx_lock:
+            self.tx_waiting.pop(axis, None)
+            self.tx_queues.setdefault(axis, deque()).appendleft(delta)
+        return False
+
+    def _flush_tx_queues(self, event):
+        """兜底扫描：清理等待反馈超时的轴，并为可发送的轴补发下一帧。
+        正常节奏由位置反馈驱动：收到该轴编码器反馈后才发下一帧（见 _dispatch_axis_feedback）"""
+        now = rospy.Time.now().to_sec()
+        with self.tx_lock:
+            for axis, ts in list(self.tx_waiting.items()):
+                if now - ts > self.tx_wait_timeout:
+                    del self.tx_waiting[axis]
+                    rospy.logwarn("⏰ 轴%d 等待位置反馈超时 %.1fs，视为反馈丢失，继续下发", axis, now - ts)
+        with self.tx_lock:
+            axes = list(self.tx_queues.keys())
+        for axis in axes:
+            self._try_send_next(axis)
 
     def on_home_cmd(self, msg):
         """/control/home_cmd：回零命令，position=[home_mode]（0x01=回零, 0x02=清除基准）"""
@@ -400,7 +448,44 @@ class CANBusBridge:
     def _header(self):
         return Header(stamp=rospy.Time.now())
 
+    # ======================================================================
+    # 会话式模块确认：领号段 CAN 帧桥接（唯一 CAN 出入口）
+    # ======================================================================
+    def _handle_uid_frame(self, can_id, data):
+        """解析领号段上行帧：未编号宣告 / 分配确认，转发给模块确认节点"""
+        if can_id == self.UID_CONFIRM_ID and len(data) >= 8:
+            # 分配确认：data[0..6]=Uid56，data[7]=(SEG<<4)|Result
+            uid56 = int.from_bytes(data[0:7], 'big')
+            seg, result = data[7] >> 4, data[7] & 0xF
+            self.pub_seg_confirm.publish(SegConfirm(
+                header=self._header(), uid56=uid56, seg=seg, result=result))
+            rospy.loginfo("🤝 分配确认：UID56=%X SEG=%d Result=%d", uid56, seg, result)
+            return
+        if self.UID_ANNOUNCE_BASE <= can_id <= self.UID_ANNOUNCE_MAX \
+                and (can_id - self.UID_ANNOUNCE_BASE) % 4 == 0 and len(data) >= 8:
+            # 未编号宣告：data[0]=DeviceType，data[1..7]=UID 低 56 位（大端）
+            slot = (can_id - self.UID_ANNOUNCE_BASE) // 4
+            uid56 = int.from_bytes(data[1:8], 'big')
+            self.pub_uid_announce.publish(UidAnnounce(
+                header=self._header(), device_type=data[0], uid56=uid56, slot=slot))
+            rospy.loginfo("📢 未编号宣告：槽%d 类型=0x%02X UID56=%X", slot, data[0], uid56)
+
+    def on_seg_assign(self, msg):
+        """模块确认节点的分配请求 → 发分配帧 0x15BC0010（UID56 大端 7 字节 + (SEG<<4|Seq)）"""
+        seg, seq = int(msg.seg), int(msg.seq)
+        if not (0 <= seg <= 14):
+            rospy.logwarn("⚠️ 分配 SEG=%d 非法（0~14，15 仅用于领号），已丢弃", seg)
+            return
+        uid56 = int(msg.target_uid56) & 0x00FFFFFFFFFFFFFF
+        data = uid56.to_bytes(7, 'big') + bytes([((seg & 0xF) << 4) | (seq & 0xF)])
+        if self._send_can_frame(self.UID_ASSIGN_ID, data):
+            rospy.loginfo("📤 分配应答 → UID56=%X SEG=%d Seq=%d", uid56, seg, seq)
+
     def _parse_can_frame(self, msg):
+        # 领号段（0x15BC00xx）：会话式模块确认协议，独立处理，不走 V2 位域分派
+        if (msg.arbitration_id & self.UID_FRAME_MASK) == self.UID_FRAME_BASE:
+            self._handle_uid_frame(msg.arbitration_id, bytes(msg.data))
+            return
         f = self._parse_id(msg.arbitration_id)
         grp, seg, node, axis, direction, mnum, data = (
             f["grp"], f["seg"], f["node"], f["axis"], f["dir"], f["msg"], bytes(msg.data))
@@ -574,7 +659,12 @@ class CANBusBridge:
             rospy.logwarn_throttle(10.0, "🩺 CAN 链路 节点%d TEC=%d REC=%d", node, data[0], data[1])
 
     def _dispatch_axis_feedback(self, module_id, device_id, axis, angle):
-        """按轴号分发到旋转/摆动/伸缩原始反馈话题（0.01°）；module_id 为帧 SEG 位域"""
+        """按轴号分发到旋转/摆动/伸缩原始反馈话题（0.01°）；module_id 为帧 SEG 位域。
+        同时将该反馈视为"轴编码器信息回传"：清除该轴等待标记并立即补发下一帧增量"""
+        with self.tx_lock:
+            was_waiting = self.tx_waiting.pop(axis, None) is not None
+        if was_waiting:
+            self._try_send_next(axis)
         fb = Feedback(header=self._header(), module_id=module_id,
                       device_id=device_id, position=[float(angle)])
         joint_idx = (axis - 1) % 3

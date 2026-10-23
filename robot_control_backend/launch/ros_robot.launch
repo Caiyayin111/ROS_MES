@@ -31,14 +31,6 @@
     output="screen"
   />
 
-  <!-- 4. web桥接节点：前端通信 -->
-  <!-- <node
-    name="web_data_node"
-    pkg="robot_control_backend"
-    type="web_data_node.py"
-    output="screen"
-  /> -->
-
   <!-- 5. 点云处理节点：PCA摆正 + 统计滤波 + 智能全覆盖切块 -->
   <node
     name="pointcloud_processor_node"
