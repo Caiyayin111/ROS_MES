@@ -57,6 +57,10 @@ class CANBusBridge:
     SUB_MODULE_STOP = 0x08
     SUB_AXIS_STOP = 0x0C
 
+    # 事件类型编码（写入 can_event_log.event_type）
+    EVT_ARRIVE, EVT_STOP, EVT_AXIS_FAULT, EVT_HOME, EVT_LIMIT = 1, 2, 3, 4, 5
+    EVT_CMD_ACK, EVT_VACUUM_LOSS, EVT_WDG_WARN, EVT_NODE_FAULT, EVT_BOOT = 6, 7, 8, 9, 10
+
     def __init__(self):
         load_env_config()
         rospy.init_node("can_bridge")
@@ -131,7 +135,8 @@ class CANBusBridge:
         rospy.Subscriber(os.environ['ROS_TOPIC_HOME_CMD'], IntCmd, self.on_home_cmd)
 
         # ---------- 心跳看门狗 ----------
-        rospy.Timer(rospy.Duration(0.1), self._heartbeat_watchdog)
+        # 下位机暂未做心跳机制，看门狗定时器先注释掉（恢复时取消注释即可）
+        # rospy.Timer(rospy.Duration(0.1), self._heartbeat_watchdog)
 
         # ---------- 相对增量分帧下发 ----------
         rospy.Timer(rospy.Duration(self.chunk_period), self._flush_tx_queues)
@@ -408,23 +413,34 @@ class CANBusBridge:
         if grp == self.GRP_SYSTEM:
             if direction == self.DIR_PERIODIC:
                 if mnum == 0:                                    # 心跳 DLC=8
-                    state = data[0]
-                    run_mask = struct.unpack_from('>I', b'\x00' + data[1:4])[0] if len(data) >= 4 else 0
-                    base_mask = struct.unpack_from('>I', b'\x00' + data[4:7])[0] if len(data) >= 7 else 0
-                    self.node_heartbeats[node] = {"time": rospy.Time.now().to_sec(),
-                                                  "state": state, "run": run_mask, "base": base_mask}
-                    self.node_lost.discard(node)
-                    self.pub_heartbeat.publish(Heartbeat(
-                        header=self._header(), module_id=module_id, node_id=node,
-                        state=state, run_axis_mask=run_mask, base_valid_mask=base_mask))
+                    # 下位机暂未做心跳机制，心跳登记/恢复/转发逻辑先注释（恢复时取消注释即可）
+                    pass
+                    # state = data[0]
+                    # run_mask = struct.unpack_from('>I', b'\x00' + data[1:4])[0] if len(data) >= 4 else 0
+                    # base_mask = struct.unpack_from('>I', b'\x00' + data[4:7])[0] if len(data) >= 7 else 0
+                    # self.node_heartbeats[node] = {"time": rospy.Time.now().to_sec(),
+                    #                               "state": state, "run": run_mask, "base": base_mask}
+                    # self.node_lost.discard(node)
+                    # self.pub_heartbeat.publish(Heartbeat(
+                    #     header=self._header(), module_id=module_id, node_id=node,
+                    #     state=state, run_axis_mask=run_mask, base_valid_mask=base_mask))
                 elif mnum == 1:                                  # 看门狗告警
                     rospy.logerr("🚨 节点%d 看门狗告警 Src=%d Action=%d", node, data[0], data[1])
+                    self._archive_event(module_id, node, self.EVT_WDG_WARN,
+                                        {"src": data[0], "action": data[1]}, "下位机看门狗告警")
                 elif mnum == 2:                                  # 节点故障
                     rospy.logerr("❌ 节点%d 故障 Err=%d Sev=%d TEC=%d REC=%d",
                                  node, data[0], data[1], data[2], data[3])
+                    self._archive_event(module_id, node, self.EVT_NODE_FAULT,
+                                        {"err": data[0], "sev": data[1], "tec": data[2], "rec": data[3]},
+                                        "节点故障")
                 elif mnum == 3:                                  # 启动握手
                     rospy.loginfo("🤝 节点%d 上线 v%d.%d.%d type=%d",
                                   node, data[0], data[1], data[3], data[2])
+                    self._archive_event(module_id, node, self.EVT_BOOT,
+                                        {"ver_major": data[0], "ver_minor": data[1],
+                                         "ver_patch": data[3], "node_type": data[2]},
+                                        "节点上线握手")
             elif direction == self.DIR_EVENT and mnum == 0:      # 吸盘失压（PRI=0 臂级）
                 pressure_raw = struct.unpack_from('>i', data, 0)[0] if len(data) >= 4 else 0
                 loss_th = struct.unpack_from('>H', data, 4)[0] if len(data) >= 6 else 0
@@ -433,6 +449,9 @@ class CANBusBridge:
                     pressure_raw=pressure_raw, loss_threshold=loss_th))
                 rospy.logerr("🌀 吸盘失压 臂=%d pressure=%d threshold=%d",
                              axis - self.sensor_arm_base + 1, pressure_raw, loss_th)
+                self._archive_event(module_id, device_id, self.EVT_VACUUM_LOSS,
+                                    {"pressure_raw": pressure_raw, "loss_threshold": loss_th},
+                                    "吸盘失压")
             return
 
         # ---------------- GRP=2 运动反馈 ----------------
@@ -466,6 +485,9 @@ class CANBusBridge:
                 self.pub_cmd_ack.publish(CmdAck(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     ack_msg=ack_msg, result=result, detail=detail))
+                self._archive_event(module_id, device_id, self.EVT_CMD_ACK,
+                                    {"ack_msg": ack_msg, "result": result, "detail": detail},
+                                    "命令应答")
                 if result != 0:
                     rospy.logwarn("📝 轴%d 命令应答 result=%d(0=接受1忙2基准3越界4故障5急停锁存)",
                                   axis, result)
@@ -481,10 +503,17 @@ class CANBusBridge:
                 self.pub_arrive.publish(ArriveNotification(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     angle=angle, pos_error=pos_err, status_bits=sb, flags=fl))
+                self._archive_event(module_id, device_id, self.EVT_ARRIVE,
+                                    {"angle": angle, "pos_error": pos_err,
+                                     "status_bits": sb, "flags": fl},
+                                    "轴到位")
             elif mnum == 1:                                      # 停止通知 DLC=2
                 self.pub_stop.publish(StopNotification(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     stop_reason=data[0], output_level=data[1]))
+                self._archive_event(module_id, device_id, self.EVT_STOP,
+                                    {"stop_reason": data[0], "output_level": data[1]},
+                                    "轴停止")
             elif mnum == 2:                                      # 轴故障事件 DLC=6
                 fault_bits = struct.unpack_from('>H', data, 0)[0] if len(data) >= 2 else 0
                 la = data[2] if len(data) >= 3 else 0
@@ -494,6 +523,10 @@ class CANBusBridge:
                     header=self._header(), module_id=module_id, device_id=device_id,
                     fault_bits=fault_bits, local_action=la, detail=det, duration_ms=dur))
                 rospy.logerr("❌ 轴%d 故障 bits=0x%04X", axis, fault_bits)
+                self._archive_event(module_id, device_id, self.EVT_AXIS_FAULT,
+                                    {"fault_bits": fault_bits, "local_action": la,
+                                     "detail": det, "duration_ms": dur},
+                                    "轴故障")
             elif mnum == 3:                                      # 回零状态 DLC=6
                 hr = data[0]
                 bv = data[1]
@@ -502,11 +535,17 @@ class CANBusBridge:
                     header=self._header(), module_id=module_id, device_id=device_id,
                     home_result=hr, base_valid=bv, angle=angle))
                 rospy.loginfo("🏠 轴%d 回零 result=%d base_valid=%d angle=%d", axis, hr, bv, angle)
+                self._archive_event(module_id, device_id, self.EVT_HOME,
+                                    {"home_result": hr, "base_valid": bv, "angle": angle},
+                                    "回零状态")
             elif mnum == 4:                                      # 限位事件 DLC=2
                 self.pub_limit_event.publish(LimitEvent(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     limit_type=data[0], output_level=data[1]))
                 rospy.logwarn("⚠️ 轴%d 限位 type=%d", axis, data[0])
+                self._archive_event(module_id, device_id, self.EVT_LIMIT,
+                                    {"limit_type": data[0], "output_level": data[1]},
+                                    "限位触发")
             return
 
         # ---------------- GRP=4 传感器（臂级 axis 21~25）----------------
@@ -569,18 +608,19 @@ class CANBusBridge:
 
     # ======================================================================
     # 心跳看门狗
+    # 下位机暂未做心跳机制，超时急停巡检逻辑整体注释（恢复时连同上方 Timer 一起取消注释）
     # ======================================================================
-    def _heartbeat_watchdog(self, event):
-        now = rospy.Time.now().to_sec()
-        for node in range(1, self.node_count + 1):
-            hb = self.node_heartbeats.get(node)
-            if hb is None:
-                continue
-            if now - hb["time"] > self.heartbeat_timeout and node not in self.node_lost:
-                self.node_lost.add(node)
-                rospy.logerr("🚨 节点%d 心跳超时 %.0fms，广播急停！", node, self.heartbeat_timeout * 1000)
-                self._clear_all_queues()
-                self._send_can_frame(0x00000000, bytes([0x01]))
+    # def _heartbeat_watchdog(self, event):
+    #     now = rospy.Time.now().to_sec()
+    #     for node in range(1, self.node_count + 1):
+    #         hb = self.node_heartbeats.get(node)
+    #         if hb is None:
+    #             continue
+    #         if now - hb["time"] > self.heartbeat_timeout and node not in self.node_lost:
+    #             self.node_lost.add(node)
+    #             rospy.logerr("🚨 节点%d 心跳超时 %.0fms，广播急停！", node, self.heartbeat_timeout * 1000)
+    #             self._clear_all_queues()
+    #             self._send_can_frame(0x00000000, bytes([0x01]))
 
     # ======================================================================
     # 数据库归档
@@ -604,10 +644,27 @@ class CANBusBridge:
                 Notes TEXT,
                 PRIMARY KEY (Createtime, sensor_ID)
             );
+
+            -- 事件日志表：到位/停止/故障/回零/限位/命令应答/失压/系统事件
+            CREATE TABLE IF NOT EXISTS can_event_log (
+                Createtime DATETIME NOT NULL,
+                module_id INTEGER NOT NULL,
+                device_id INTEGER NOT NULL,
+                event_type INTEGER NOT NULL,
+                creater_id INTEGER NOT NULL DEFAULT 1,
+                Work_ID INTEGER NOT NULL DEFAULT 1,
+                isread INTEGER NOT NULL DEFAULT 1,
+                data TEXT NOT NULL,
+                del_flag BOOL DEFAULT false,
+                Notes TEXT,
+                PRIMARY KEY (Createtime, device_id, event_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_time ON can_event_log(Createtime);
+            CREATE INDEX IF NOT EXISTS idx_event_device ON can_event_log(device_id, event_type);
         """)
         self.db_conn.commit()
         rospy.Timer(rospy.Duration(1.0), self._sync_db)
-        rospy.loginfo("🗄️ CAN 数据归档库已连接（sensor_log）")
+        rospy.loginfo("🗄️ CAN 数据归档库已连接（sensor_log + can_event_log）")
 
     def _insert_sensor_log(self, module_id, device_id, payload, note):
         """写入 sensor_log：isread=1（上行），具体数据以 JSON 存入 data 字段"""
@@ -643,6 +700,26 @@ class CANBusBridge:
                 }, "IMU惯性数据")
             except Exception as e:
                 rospy.logerr_throttle(10.0, "sensor_log 归档失败: %s", e)
+
+    def _insert_event_log(self, module_id, device_id, event_type, payload, note):
+        """写入 can_event_log：isread=1（上行），事件详情以 JSON 存入 data 字段"""
+        # 微秒级时间戳：同一秒内同轴可能连发多种事件（如故障+停止），秒级会触发主键冲突
+        createtime = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        data_json = json.dumps(payload, ensure_ascii=False)
+        self.db_conn.execute(
+            "INSERT INTO can_event_log"
+            " (Createtime, module_id, device_id, event_type, creater_id, Work_ID, isread, data, del_flag, Notes)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (createtime, module_id, device_id, event_type, 1, 1, 1, data_json, 0, note))
+        self.db_dirty = True
+
+    def _archive_event(self, module_id, device_id, event_type, payload, note):
+        """归档事件类上行数据到 can_event_log；module_id 取 CAN 帧 SEG"""
+        with self.db_lock:
+            try:
+                self._insert_event_log(module_id, device_id, event_type, payload, note)
+            except Exception as e:
+                rospy.logerr_throttle(10.0, "can_event_log 归档失败: %s", e)
 
     def _sync_db(self, event):
         if self.db_dirty:
