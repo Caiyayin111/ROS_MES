@@ -722,6 +722,26 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 
 ---
 
+## 12. ROS1/ROS2 适配说明（后端适配层）
+
+后端内置 ROS 适配层 `mes_web/ros_mes_hou/app/ros/`，业务接口不感知 ROS 版本；环境变量 `ROS_VERSION`（`1`/`ros1`/`2`/`ros2`，默认 `1`）选择适配器，定义于 `app/ros/profile.py`。
+
+前后端与 ROS 端全部通过 rosbridge JSON 协议（`advertise`/`publish`/`subscribe`）通信，该协议两代 ROS 一致，版本差异只有下表几项：
+
+| 差异项 | ROS1（现网） | ROS2（预设，待 ROS 端定稿核对） |
+|---|---|---|
+| 自定义消息类型串 | `robot_control_backend/RotationCmd` | `robot_control_backend/msg/RotationCmd` |
+| std_msgs 类型串 | `std_msgs/String` | `std_msgs/msg/String` |
+| `header.stamp` 字段名 | `secs` / `nsecs` | `sec` / `nanosec` |
+| rospy 原生通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | 有 | 无（`/ros/**` 返回 503，等 ROS 端提供后补充） |
+| 话题名 | 见第 4 节 | 同 ROS1；ROS 端若改名，用环境变量 `ROS_TOPIC_<键名>` 覆盖或改 `profile.py` 默认值 |
+
+- ROS1 / ROS2 的适配器分别为 `app/ros/ros1/Ros1Dispatcher`、`app/ros/ros2/Ros2Dispatcher`，共用 `app/ros/rosbridge.py` 传输层；本文档第 4、5 节记录的话题与消息格式即 ROS1 现网契约，ROS2 端移植定稿后由 ROS 端同步确认差异表。
+- 急停 `/control/softstop` 沿用现网 typeless publish（不带 advertise/type）；若 ROS2 端收不到，再补 `advertise`。
+- 已知协议不一致（**未修**，待与 ROS 端确认）：① 模块确认失败码——ROS 端 `module_confirme_node` 实际发布 `-1`，文档写 `1`，后端沿用 `1`；② 图纸路径话题——后端发 `/frontend_pointcloud_topic`，ROS 端 `rob_arm.env` 中 `data_process_node` 实际订阅 `/control/frontend_pointcloud_topic`。
+
+---
+
 ## 附录：关键文件索引
 
 ### 后端 (ros_mes_hou)
@@ -738,10 +758,11 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 | `app/api/endpoints/ws_stream.py` | 大屏 WebSocket 流 |
 | `app/api/endpoints/user.py` / `task.py` / `workflow.py` / `drawing.py` | 业务管理接口 |
 | `app/api/deps.py` | `get_current_user` / `get_current_admin` 鉴权依赖 |
-| `app/services/rosbridge_gateway.py` | **核心：rosbridge 网关，消息构造与下发** |
-| `app/services/ros_control.py` | 硬件控制（急停、串口测试、硬件状态） |
-| `app/services/ros_service.py` | 旧版 rospy 直接发布 |
-| `app/services/ros_dispatcher.py` | ROS 分发适配层（mock/command 模式） |
+| `app/ros/profile.py` | **核心：ROS1/ROS2 协议差异定义（类型串、stamp 字段、话题表），见第 12 节** |
+| `app/ros/rosbridge.py` | **核心：rosbridge 网关（传输层），消息构造与下发** |
+| `app/ros/base.py` | ROS 适配器统一接口 + 子进程工具（硬件状态/串口测试/大屏数据流） |
+| `app/ros/normalizer.py` | 反馈消息归一化（device_id → 前端标签） |
+| `app/ros/ros1/` / `app/ros/ros2/` | ROS1 适配器（含 rospy 原生通道）/ ROS2 适配器 |
 | `app/schemas/finetuning.py` / `hardware.py` | 微调 / 硬件反馈 Pydantic 模型 |
 | `app/db/models.py` | 17 张表 SQLAlchemy 模型 |
 | `app/core/config.py` / `security.py` | 配置项 / JWT 与密码 |

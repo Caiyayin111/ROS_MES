@@ -18,7 +18,13 @@
   - 路径逻辑收敛到 `mes_web/ros_mes_hou/app/core/config.py`：新增 `BACKEND_ROOT` / `PROJECT_ROOT`（向上自动查找含 `robot_control_backend` 或 `.git` 的目录，可用环境变量 `PROJECT_ROOT` 覆盖）/ `ROS_SCRIPTS_DIR`（可用环境变量覆盖）；`ros_control.py`、`coordination.py`、`sqlite_create.py` 原先各自向上数层级拼路径的代码统一改为读配置
   - README / deploy 三份文件 / 接口字段文档 / 命名规范中的路径同步更新；`.gitignore` 增加 `.zcode/`
   - `???` 提醒：队友 pull 后需重新 `cd mes_web\ros_mes_hou` 激活 venv；deploy_windows.ps1 的路径约定是"仓库文件夹的上一级 + 显式 `ROS_MES\` 前缀"，未改变
-- ROS1/ROS2 适配层拆分（进行中，见下一条）
+- ROS1/ROS2 适配层拆分（已完成，**全套 35 passed 全绿**，原 27 + 新增 8）
+  - 新建 `mes_web/ros_mes_hou/app/ros/`：`profile.py`（ROS1/ROS2 协议差异表：消息类型串 `pkg/X` vs `pkg/msg/X`、stamp 字段 `secs/nsecs` vs `sec/nanosec`、话题表支持 `ROS_TOPIC_<键名>` 环境变量覆盖）、`rosbridge.py`（共用传输层，原 `rosbridge_gateway.py` 泛化 + 急停收编，顺带消灭 `ros_control.py` 硬编码的 `ws://localhost:9010`）、`base.py`（适配器接口 + 子进程工具）、`normalizer.py`（原反馈归一化）、`ros1/`（rospy 原生通道由 `ros_service.py` 迁入）、`ros2/`（预设实现，ROS 端定稿后微调 profile 即可）
+  - 工厂 `get_ros_dispatcher()` 读环境变量 `ROS_VERSION`（1/ros1/2/ros2，默认 1）返回适配器单例；端点默认参数改为 `dispatcher=None` 惰性解析，测试注入 DummyDispatcher 的方式不变；对外 API 路径/请求/响应零变化
+  - 删除：`app/services/ros_dispatcher.py`（死代码）、`app/services/` 目录整体移除；`WEBSOCKET_URI` 死常量
+  - 配置收口：`ROSBRIDGE_URL` 进入 `core/config.py`；`deploy/config/backend.env` 新增 `ROS_VERSION=1`
+  - 文档：《接口字段文档》新增"第 12 节 ROS1/ROS2 适配说明"（差异表 + 附录文件索引更新）；README 增适配层说明
+  - **记录未修的协议不一致（用户决定本次不修，待与 ROS 端确认）**：① 模块确认失败码——ROS 端 `module_confirme_node` 实际发布 `-1`（`RESULT_FAILED = -1`），后端沿用文档值只识别 `1`，真失败时会等超时而非立即报错；② 图纸路径话题——后端发 `/frontend_pointcloud_topic`，ROS 端 `rob_arm.env` 里 `ROS_TOPIC_FRONTEND_POINTCLOUD=/control/frontend_pointcloud_topic`（`data_process_node` 实际订阅值），文档写的也是无前缀版；两处不一致，需 ROS 端确认现网实际生效的话题后统一
 
 ## 2026-10-05（七）
 

@@ -1,9 +1,14 @@
-# app/services/ros_service.py
+# app/ros/ros1/native.py
+"""ROS1 原生节点通道（原 app/services/ros_service.py，rospy 直连）。
 
+这是第一代测试用的直连通道（/web_cmd 下发、/robot_status 订阅），
+V2 业务流已全部走 rosbridge；rospy 不可用时静默禁用，不影响 HTTP 服务。
+"""
 import json
 import threading
 from typing import Any, Dict, Optional
 
+from app.ros.base import RosDispatchError
 
 try:
     import rospy
@@ -14,10 +19,6 @@ except Exception as exc:
     ROS_IMPORT_ERROR = exc
 else:
     ROS_IMPORT_ERROR = None
-
-
-class RosDispatchError(Exception):
-    pass
 
 
 pub: Optional["rospy.Publisher"] = None
@@ -104,7 +105,7 @@ def ros_node():
 
 def start_ros_thread():
     """
-    给 main.py 调用。
+    给适配器 start_native_node() 调用。
     FastAPI 启动时开线程跑 ROS，避免 rospy.spin() 阻塞 HTTP 服务。
     """
     global ros_thread_started

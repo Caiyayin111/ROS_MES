@@ -10,11 +10,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db import models
 from app.db.database import get_db
-from app.services.rosbridge_gateway import (
-    RosbridgeError,
-    build_drawing_path_publish_payload,
-    rosbridge_dispatcher,
-)
+from app.ros import get_ros_dispatcher
+from app.ros.base import RosbridgeError
+from app.ros.rosbridge import build_drawing_path_publish_payload
 
 router = APIRouter()
 
@@ -82,9 +80,10 @@ def proxy_pointcloud_view(view_name: str):
 def send_coordination(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
-    dispatcher=rosbridge_dispatcher,
+    dispatcher=None,
     wait_for_views=wait_for_pointcloud_views,
 ):
+    dispatcher = dispatcher or get_ros_dispatcher()
     device_id = payload.get("device_id")
     module_id = payload.get("module_id")
     unit_id = payload.get("unit_id")

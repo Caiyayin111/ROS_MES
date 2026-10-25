@@ -2,11 +2,9 @@
 
 from fastapi import APIRouter, Body, HTTPException
 
-from app.services.rosbridge_gateway import (
-    RosbridgeError,
-    build_module_confirm_publish_payload,
-    rosbridge_dispatcher,
-)
+from app.ros import get_ros_dispatcher
+from app.ros.base import RosbridgeError
+from app.ros.rosbridge import build_module_confirm_publish_payload
 
 router = APIRouter()
 
@@ -19,7 +17,8 @@ def first_not_none(*values):
 
 
 @router.post("/")
-def lock_and_dispatch_module(payload: dict = Body(...), dispatcher=rosbridge_dispatcher):
+def lock_and_dispatch_module(payload: dict = Body(...), dispatcher=None):
+    dispatcher = dispatcher or get_ros_dispatcher()
     x = first_not_none(
         payload.get("x"),
         payload.get("X"),

@@ -6,14 +6,9 @@ from app.crud import finetuning as finetuning_crud
 from app.db import models
 from app.db.database import get_db
 from app.schemas import finetuning as finetuning_schemas
-from app.services import ros_control
-from app.services.ros_dispatcher import RosDispatchError, ros_dispatcher
-from app.services.rosbridge_gateway import (
-    RosbridgeError,
-    build_fine_tuning_publish_payload,
-    rosbridge_dispatcher,
-    stream_feedback,
-)
+from app.ros import get_ros_dispatcher
+from app.ros.base import RosDispatchError, RosbridgeError
+from app.ros.rosbridge import build_fine_tuning_publish_payload
 from app.schemas.hardware import HardwareFeedback, EmergencyStopResponse
 from sqlalchemy.orm import Session
 
@@ -24,8 +19,9 @@ router = APIRouter()
 def send_fine_tuning(
     record: finetuning_schemas.FineTuningCreate,
     db: Session = Depends(get_db),
-    dispatcher=rosbridge_dispatcher,
+    dispatcher=None,
 ):
+    dispatcher = dispatcher or get_ros_dispatcher()
     db_record = finetuning_crud.create_fine_tuning_record(
         db=db,
         record=record,
@@ -71,7 +67,7 @@ def send_fine_tuning(
 async def fine_tuning_feedback_ws(websocket: WebSocket):
     await websocket.accept()
     try:
-        async for feedback in stream_feedback():
+        async for feedback in get_ros_dispatcher().stream_feedback():
             await websocket.send_json(feedback)
     except WebSocketDisconnect:
         return
@@ -84,7 +80,7 @@ async def test_serial_connection(
     串口连接测试：
     通过串口向下位机发送测试数据，并等待响应确认，来验证上下位机通信是否正常
     """
-    result = await ros_control.test_serial_connection()
+    result = await get_ros_dispatcher().test_serial_connection()
     return {
         "code": 200,
         "message": "串口测试完成" if result.get("success") else "串口测试失败",
@@ -98,7 +94,7 @@ async def get_realtime_hardware_status(
     """
     获取底层机械臂的真实硬件状态（绕过数据库直接读硬件）
     """
-    status_data = await ros_control.get_hardware_status()
+    status_data = await get_ros_dispatcher().get_hardware_status()
     if "error" in status_data:
          raise HTTPException(status_code=500, detail=status_data["error"])
     return status_data
@@ -111,7 +107,7 @@ async def activate_emergency_stop(
     点击按钮：触发机械臂急停！
     """
     print(f"警告：操作员 {current_user.Username} 触发了紧急停止！")
-    success = await ros_control.trigger_emergency_stop()
+    success = await get_ros_dispatcher().trigger_emergency_stop()
     
     if success:
         return {

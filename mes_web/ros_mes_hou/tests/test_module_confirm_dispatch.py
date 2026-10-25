@@ -2,11 +2,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from app.api.endpoints.module import lock_and_dispatch_module
-from app.services.rosbridge_gateway import (
-    RosbridgeError,
-    RosbridgeDispatcher,
-    build_module_confirm_publish_payload,
-)
+from app.ros.base import RosbridgeError
+from app.ros.profile import ROS1_PROFILE
+from app.ros.rosbridge import RosbridgeClient, build_module_confirm_publish_payload
 
 
 class DummyDispatcher:
@@ -70,10 +68,10 @@ class ModuleConfirmDispatchTest(unittest.TestCase):
                     '"msg":{"module_id":18,"device_id":0,"position":[100]}}'
                 )
 
-        dispatcher = RosbridgeDispatcher(url="ws://test", timeout=0.1)
+        dispatcher = RosbridgeClient(ROS1_PROFILE, url="ws://test", timeout=0.1)
         payload = build_module_confirm_publish_payload(18)
 
-        with patch("app.services.rosbridge_gateway.websockets") as websockets_mock:
+        with patch("app.ros.rosbridge.websockets") as websockets_mock:
             websockets_mock.connect = Mock(return_value=FakeWebSocket())
             result = dispatcher.dispatch("module_confirm", payload)
 
@@ -105,10 +103,10 @@ class ModuleConfirmDispatchTest(unittest.TestCase):
                     '"msg":{"module_id":18,"device_id":0,"position":[1]}}'
                 )
 
-        dispatcher = RosbridgeDispatcher(url="ws://test", timeout=0.1)
+        dispatcher = RosbridgeClient(ROS1_PROFILE, url="ws://test", timeout=0.1)
         payload = build_module_confirm_publish_payload(18)
 
-        with patch("app.services.rosbridge_gateway.websockets") as websockets_mock:
+        with patch("app.ros.rosbridge.websockets") as websockets_mock:
             websockets_mock.connect = Mock(return_value=FakeWebSocket())
             with self.assertRaises(RosbridgeError) as exc:
                 dispatcher.dispatch("module_confirm", payload)

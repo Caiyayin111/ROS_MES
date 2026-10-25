@@ -4,7 +4,7 @@ import json
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends, status
 from sqlalchemy.orm import Session
 from jose import jwt, JWTError
-from app.services.ros_control import stream_real_robot_data
+from app.ros import get_ros_dispatcher
 from app.db.database import get_db
 from app.core import security
 from app.db import models
@@ -50,7 +50,7 @@ async def robot_status_stream(websocket: WebSocket, token: str = Query(None), db
     
     # 3. 开始推送数据
     try:
-        async for real_data_json_str in stream_real_robot_data():
+        async for real_data_json_str in get_ros_dispatcher().stream_robot_data():
             await websocket.send_text(real_data_json_str)
             
     except WebSocketDisconnect:

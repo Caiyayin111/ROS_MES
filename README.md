@@ -20,6 +20,8 @@
 | `robot_control_backend/` | ROS 机器人控制节点 | ROS · Python |
 | `deploy/` | 部署配置与说明（见 `deploy/README_DEPLOY.md`） | — |
 
+> 后端内置 ROS1/ROS2 适配层：`backend.env` 中 `ROS_VERSION=1`（默认）或 `2` 切换，协议差异集中在 `mes_web/ros_mes_hou/app/ros/profile.py`。
+
 ## 快速启动
 
 Windows 本地已验证环境：标准 Python 3.12、Node.js 20。创建虚拟环境时使用 `py -3.12`，避免 PATH 中的 MSYS2 Python 被选中。

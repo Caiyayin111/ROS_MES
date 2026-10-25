@@ -39,6 +39,8 @@ class Settings:
     ROS_SCRIPTS_DIR: str = os.getenv(
         "ROS_SCRIPTS_DIR", os.path.join(PROJECT_ROOT, "robot_control_backend", "scripts")
     )
+    # rosbridge WebSocket 地址（ROS1/ROS2 通用；ROS_VERSION 环境变量见 app/ros/profile.py）
+    ROSBRIDGE_URL: str = os.getenv("ROSBRIDGE_URL", "ws://localhost:9010")
     BACKEND_CORS_ORIGINS: List[str] = [
         origin.strip()
         for origin in os.getenv("BACKEND_CORS_ORIGINS", "*").split(",")

@@ -358,6 +358,7 @@ A:
 | DATABASE_URL | SQLite 数据库路径 | sqlite:///../ros_database.db |
 | BACKEND_CORS_ORIGINS | CORS 允许的源 | * |
 | ROSBRIDGE_URL | rosbridge WebSocket 地址 | ws://127.0.0.1:9010 |
+| ROS_VERSION | ROS 版本适配（1/ros1 或 2/ros2） | 1 |
 | SECRET_KEY | JWT 密钥（务必修改） | 占位字符串 |
 | ACCESS_TOKEN_EXPIRE_MINUTES | Token 过期时间（分钟） | 1440 |
 | HOST | 监听地址 | 0.0.0.0 |

@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.rosbridge_gateway import normalize_feedback_message
+from app.ros.normalizer import normalize_feedback_message
 
 
 class RosbridgeGatewayTest(unittest.TestCase):

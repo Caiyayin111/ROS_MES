@@ -2,12 +2,8 @@
 
 from fastapi import APIRouter, HTTPException
 
-from app.services.ros_service import (
-    RosDispatchError,
-    latest_status,
-    publish_ros_command,
-    ros_ready,
-)
+from app.ros import get_ros_dispatcher
+from app.ros.base import RosDispatchError
 
 router = APIRouter()
 
@@ -15,7 +11,7 @@ router = APIRouter()
 @router.get("/send_ros")
 def send_ros(msg: str):
     try:
-        dispatch_result = publish_ros_command(
+        dispatch_result = get_ros_dispatcher().publish_web_cmd(
             "send_ros",
             {
                 "msg": msg,
@@ -36,8 +32,5 @@ def get_ros_status():
     return {
         "code": 200,
         "message": "获取 ROS 状态成功",
-        "data": {
-            **latest_status,
-            "ros_ready": ros_ready,
-        },
+        "data": get_ros_dispatcher().native_status,
     }

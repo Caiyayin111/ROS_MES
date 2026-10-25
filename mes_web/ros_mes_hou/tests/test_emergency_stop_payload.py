@@ -2,7 +2,8 @@ import json
 import unittest
 from unittest.mock import Mock, patch
 
-from app.services import ros_control
+from app.ros.profile import ROS1_PROFILE
+from app.ros.rosbridge import RosbridgeClient
 
 
 class EmergencyStopPayloadTest(unittest.IsolatedAsyncioTestCase):
@@ -20,10 +21,11 @@ class EmergencyStopPayloadTest(unittest.IsolatedAsyncioTestCase):
             async def send(self, message):
                 sent_messages.append(message)
 
-        with patch.object(ros_control, "websockets") as websockets_mock:
+        client = RosbridgeClient(ROS1_PROFILE, url="ws://test")
+        with patch("app.ros.rosbridge.websockets") as websockets_mock:
             websockets_mock.connect = Mock(return_value=FakeWebSocket())
 
-            success = await ros_control.trigger_emergency_stop()
+            success = await client.publish_softstop()
 
         self.assertTrue(success)
         payload = json.loads(sent_messages[0])
