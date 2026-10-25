@@ -50,8 +50,7 @@ def update_config_from_env():
     Config.MAX_SWING_ANGLE = float(os.environ['MAX_SWING_ANGLE'])
     Config.ARM_MIN_EXTEND   = float(os.environ['ARM_MIN_EXTEND'])       # cm
     Config.ARM_MAX_EXTEND   = float(os.environ['ARM_MAX_EXTEND'])       # cm
-    # 伸缩轴丝杠导程（mm/转），用于 角度(°) ↔ 长度(mm) 换算
-    Config.MM_PER_REV       = float(os.environ['MM_PER_REV'])
+    # 伸缩轴为直线位移轴，反馈/指令单位均为 mm（CAN 字段 0.01mm，由 feedback_node 换算）
     # 单次伸缩增量限幅（mm），publish_cmd 增量限幅用；与 telescopic_node 共用同一配置键
     Config.TELESCOPIC_MAX_DELTA_MM = float(os.environ['TELESCOPIC_MAX_DELTA_MM'])
     Config.MAX_WORKERS      = int(os.environ['MAX_WORKERS'])
@@ -152,12 +151,10 @@ class KinematicsNode:
         self.current_state[arm_id]["swing"] = msg.position[0]
 
     def telescopic_feedback_cb(self, msg):
-        """伸缩轴反馈为角度(°)，需换算为 mm 后存入 current_state（cur_tel 按 mm 使用）"""
+        """伸缩轴为直线位移轴：反馈已是 mm（feedback_node 由 0.01mm 换算），直接存入 current_state"""
         arm_id = (int(msg.device_id) - 1) // 3 + 1
         self._ensure_arm(arm_id)
-        angle_deg = msg.position[0]
-        length_mm = angle_deg * (Config.MM_PER_REV / 360.0)
-        self.current_state[arm_id]["telescopic"] = length_mm
+        self.current_state[arm_id]["telescopic"] = msg.position[0]
 
     def _ensure_arm(self, arm_id):
         if arm_id not in self.current_state:

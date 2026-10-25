@@ -6,9 +6,9 @@
 V2 变更：
   - 支持 5 臂，每臂 3 轴：伸缩轴 axis ∈ {3,6,9,12,15}，arm_idx=(axis-1)//3（J3，每臂第3轴）
   - 伸缩长度绝对范围 0~30mm（TELESCOPIC_MIN_MM / TELESCOPIC_MAX_MM）
-  - 控制语义：输入相对增量（mm），维护软件长度变量，未超限时把增量换算为 0.01° 原样透传
+  - 控制语义：输入相对增量（mm），维护软件长度变量，未超限时把增量按 0.01mm 原样透传
   - 下发前检查：长度变量 + 增量超限则丢弃该指令、变量不变，并回执超位 CmdAck
-  - mm ↔ 角度机械换算：angle_deg = length_mm × (360 / MM_PER_REV)
+  - 单位：电机3 为直线位移轴，下行增量/上行反馈的 CAN 字段均为 0.01mm（不再是角度）
   - 反馈只用于定初值；反馈中断超过 FEEDBACK_TIMEOUT 后恢复时用新反馈重建变量
 """
 import rospy
@@ -35,13 +35,11 @@ class TelescopeSimple:
     def __init__(self):
         load_env_config()
         rospy.init_node("telescope_simple_node")
-        rospy.loginfo("✅ 伸缩轴节点 启动（5 臂×3 轴，0~30mm，增量透传，mm↔角度 0.01°）")
+        rospy.loginfo("✅ 伸缩轴节点 启动（5 臂×3 轴，0~30mm，增量按 0.01mm 透传）")
 
+        # 电机3 为直线位移轴：CAN 字段单位为 0.01mm，不再做 mm↔角度 换算
+        # （台架标定 1cm=177847 counts，counts 换算由下位机固件完成）
         # V2：module_id 不做静态配置，cmd_callback 从指令消息（msg.module_id）透传
-        # V2 机械换算：每转导程 MM_PER_REV mm → 360°，即 1mm = 360/MM_PER_REV 度
-        mm_per_rev = float(os.environ['MM_PER_REV'])
-        self.deg_per_mm = 360.0 / mm_per_rev
-        self.mm_per_deg = mm_per_rev / 360.0
 
         # 伸缩长度绝对软限位（mm）
         self.MIN_MM = float(os.environ['TELESCOPIC_MIN_MM'])
@@ -150,25 +148,25 @@ class TelescopeSimple:
 
         self.lengths[arm_idx] = new_len
 
-        # 未超限：增量 mm → 角度 → 0.01°，原样透传
-        delta_centi_deg = int(round(delta_mm * self.deg_per_mm * 100))
+        # 未超限：mm → 0.01mm 原样透传（直线位移轴下发距离，不换算角度）
+        delta_centi_mm = int(round(delta_mm * 100))
         int_cmd_msg = IntCmd()
         int_cmd_msg.header = Header(stamp=rospy.Time.now())
         int_cmd_msg.module_id = msg.module_id
         int_cmd_msg.device_id = device_id
-        int_cmd_msg.position = [delta_centi_deg]
+        int_cmd_msg.position = [delta_centi_mm]
         self.output_pub.publish(int_cmd_msg)
 
-        self._insert_sensor_log(msg.module_id, device_id, delta_centi_deg, "下发伸缩增量数据")
-        rospy.loginfo(f"Arm{arm_idx+1} 伸缩增量：{delta_mm:+.3f}mm → 下发 {delta_centi_deg}(0.01°) | 长度变量 {new_len:+.3f}mm")
+        self._insert_sensor_log(msg.module_id, device_id, delta_centi_mm, "下发伸缩增量数据")
+        rospy.loginfo(f"Arm{arm_idx+1} 伸缩增量：{delta_mm:+.3f}mm → 下发 {delta_centi_mm}(0.01mm) | 长度变量 {new_len:+.3f}mm")
 
     def feedback_callback(self, msg):
-        """反馈为角度(°)，换算回 mm；仅用于定初值，中断超过阈值后恢复时重建长度变量"""
+        """反馈为长度(mm，feedback_node 已由 0.01mm 换算)；仅用于定初值，中断超过阈值后恢复时重建"""
         arm_idx = self._device_to_arm_idx(msg.device_id)
         if arm_idx < 0:
             return
         now = time.time()
-        length_mm = msg.position[0] * self.mm_per_deg
+        length_mm = msg.position[0]
         if not self.axis_ready[arm_idx]:
             self.lengths[arm_idx] = length_mm
             self.axis_ready[arm_idx] = True

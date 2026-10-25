@@ -323,18 +323,19 @@ class CANBusBridge:
                           axis, cmd_type, cmd_value, rate_idx, can_id)
             return
 
-        # ---- 单轴相对增量命令：position=[delta_centideg]（0.01°，有符号补码）----
+        # ---- 单轴相对增量命令：position=[delta]（旋转/摆动 0.01°，伸缩轴为 0.01mm）----
         if 1 <= axis <= self.axis_count:
             # 去重签名含 header.stamp：仅抑制同一条指令的回声/重复投递（stamp 相同）。
             # stamp 缺失（=0）时不做去重。
             stamp_nsec = msg.header.stamp.to_nsec() if msg.header and msg.header.stamp.to_nsec() > 0 else None
             sig = (device_id, value, stamp_nsec)
             if stamp_nsec is not None and sig == self.last_sent:
-                rospy.loginfo("↪️ 轴%d 重复指令（stamp 相同，增量 %d/0.01°）已抑制", axis, value)
+                rospy.loginfo("↪️ 轴%d 重复指令（stamp 相同，增量 %d）已抑制", axis, value)
                 return
             frames = self._enqueue_axis_delta(axis, value)
             self.last_sent = sig
-            rospy.loginfo("📤 轴%d 相对增量 %+d(0.01°) → 排入 %d 帧", axis, value, frames)
+            unit = "0.01mm" if (axis - 1) % 3 == 2 else "0.01°"
+            rospy.loginfo("📤 轴%d 相对增量 %+d(%s) → 排入 %d 帧", axis, value, unit, frames)
             return
 
         rospy.logwarn("⚠️ device_id=%d 非法（允许 1~%d 轴 / %d~%d 臂级）",
@@ -659,8 +660,9 @@ class CANBusBridge:
             rospy.logwarn_throttle(10.0, "🩺 CAN 链路 节点%d TEC=%d REC=%d", node, data[0], data[1])
 
     def _dispatch_axis_feedback(self, module_id, device_id, axis, angle):
-        """按轴号分发到旋转/摆动/伸缩原始反馈话题（0.01°）；module_id 为帧 SEG 位域。
-        同时将该反馈视为"轴编码器信息回传"：清除该轴等待标记并立即补发下一帧增量"""
+        """按轴号分发到旋转/摆动/伸缩原始反馈话题（旋转/摆动 0.01°，伸缩 0.01mm）；
+        module_id 为帧 SEG 位域。同时将该反馈视为"轴编码器信息回传"：
+        清除该轴等待标记并立即补发下一帧增量"""
         with self.tx_lock:
             was_waiting = self.tx_waiting.pop(axis, None) is not None
         if was_waiting:

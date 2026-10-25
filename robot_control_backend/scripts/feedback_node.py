@@ -35,6 +35,8 @@ class FeedbackNode:
 
         # V2：位置量为绝对角度（0.01°），不再需要编码器换算系数
         self.angle_scale = 0.01              # 0.01° → 度
+        # 电机3 为直线位移轴：CAN 位置字段单位为 0.01mm
+        self.telescopic_scale = 0.01         # 0.01mm → mm
         self.g_to_n = float(os.environ['PRESSURE_G_TO_N'])
         # V2：module_id 不做静态配置，全部从接收消息透传（上行源自 CAN 帧 SEG 位域）
 
@@ -85,10 +87,10 @@ class FeedbackNode:
         self.pub_sw_fb.publish(m)
 
     def _cb_telescopic_raw(self, msg):
-        """伸缩轴反馈也是角度（0.01°），换算为度后发布；mm↔角度换算由 telescopic_node/kinematics_node 自行完成"""
-        angle = int(msg.position[0]) * self.angle_scale
+        """伸缩轴是直线位移轴：CAN 位置字段单位为 0.01mm，换算为 mm 后发布"""
+        length_mm = int(msg.position[0]) * self.telescopic_scale
         m = TelescopicCmd(header=Header(stamp=rospy.Time.now()),
-                          module_id=msg.module_id, device_id=msg.device_id, position=[angle])
+                          module_id=msg.module_id, device_id=msg.device_id, position=[length_mm])
         self.pub_tel_fb.publish(m)
 
     def _cb_pressure_raw(self, msg):
