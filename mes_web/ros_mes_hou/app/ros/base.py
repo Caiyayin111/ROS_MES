@@ -53,6 +53,10 @@ class RosDispatcher(ABC):
     async def trigger_emergency_stop(self) -> bool:
         """全局急停（/control/softstop，系统级 module_id=0 / device_id=0）。"""
 
+    @abstractmethod
+    async def release_emergency_stop(self) -> bool:
+        """急停解除（/control/softstop_release，softstop_node 转发 /arm/cmd_vel [0x04]）。"""
+
     # ---- 原生节点通道（ROS1 专属，默认不可用） ----
     def start_native_node(self) -> None:
         """启动原生 ROS 节点线程；无原生通道的适配器默认不启动。"""

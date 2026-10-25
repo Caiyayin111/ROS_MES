@@ -11,6 +11,16 @@
 
 ---
 
+## 2026-10-25（四）
+
+- 确认《三轴版 V2.1 接口清单》为 ROS 对接唯一权威，按文档收尾（已完成，**46 passed 全绿**）
+  - **修正**：模块确认 station 改为 **`/module/` 请求体必传**（操作员选组 1~15，缺省 422），删除上一条目里"默认 station=module_id+1"的推导——文档 §7.2 明确由前端选择确认第几组，且 §7.6 确认 module_id 为业务模块号（与 SEG 不同空间），无 0~14 限制
+  - **闭环**：协议不一致②（图纸话题）按清单定为无前缀 `/frontend_pointcloud_topic`，后端无需改；ROS 端 rob_arm.env 的 `/control` 前缀值与清单矛盾，待 ROS 端修正
+  - **从 ROS 源码补全**（清单未给全的部分）：cmd_ack 枚举=仅超位拒绝（`ack_msg=1, result=3, detail=1上限/2下限`，无成功回执，三轴版清单 §4 已标注）；解除急停契约=发 `/control/softstop_release`（softstop_node 转发 [0x04]）
+  - **新增**：`POST /api/control/emergency_stop/release`（急停解除，登录态）；种子数据补齐 5 臂（Unit_ID 128/160，延续每臂 +32；sensor_ID 同规律），`armIndexFromUnitId` 的 3 臂限制随之解除
+  - **前端待办**：① 模块锁定页加"确认第几组"选择并把 `station` 带进 `/module/` 请求；② FineTuningPage 按 `cmd_ack`（result=3）提示超位拒绝；③ 伸缩 °→mm 换算（系数待 ROS 确认）
+  - **仍待 ROS 端**：① rob_arm.env 图纸话题前缀修正；② MM_PER_REV 真实值（0.7 为假设值）；③（低优先）ROS2 移植时间表/包名/是否继续走 rosbridge
+
 ## 2026-10-25（三）
 
 - 对齐《三轴版 V2.1 接口清单》（ROS 端三轴化，每臂 3 轴，轴号 1~15）（已完成，**45 passed 全绿**，前端 build 通过）

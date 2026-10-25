@@ -71,5 +71,24 @@ class EmergencyStopPayloadTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(success)
 
 
+    async def test_emergency_stop_release_publishes_to_release_topic(self):
+        # 急停解除：/control/softstop_release → softstop_node 转发 /arm/cmd_vel [0x04]
+        sent_messages = []
+        fake_ws = FakeWebSocket(sent_messages)
+
+        client = RosbridgeClient(ROS1_PROFILE, url="ws://test")
+        with patch("app.ros.rosbridge.websockets") as websockets_mock:
+            websockets_mock.connect = Mock(return_value=fake_ws)
+
+            success = await client.publish_stop_release()
+
+        self.assertTrue(success)
+        payload = json.loads(sent_messages[0])
+        self.assertEqual(payload["topic"], "/control/softstop_release")
+        self.assertEqual(payload["msg"]["module_id"], 0)
+        self.assertEqual(payload["msg"]["device_id"], 0)
+        self.assertEqual(payload["msg"]["position"], [0x01])
+
+
 if __name__ == "__main__":
     unittest.main()

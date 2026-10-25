@@ -38,9 +38,14 @@ def lock_and_dispatch_module(payload: dict = Body(...), dispatcher=None):
     position = payload.get("position")
     module_id = payload.get("module_id")
     device_id = payload.get("device_id")
-    # ROS 端 V2.1 握手契约：position=[100, station]；station 可由前端显式下发，
-    # 缺省按"模块号=SEG=工位-1"推导（station = module_id + 1）
+    # V2.1 握手契约（三轴版清单 §6/§7.2）：station=工位号 1~15，由操作员选择确认第几组，
+    # 前端必须显式下发；module_id 为业务模块号，ROS 端原样回执
     station_raw = first_not_none(payload.get("station"), payload.get("Station"))
+    if station_raw is None:
+        raise HTTPException(
+            status_code=422,
+            detail="缺少工位号 station（1~15）：请选择确认第几组后随请求下发",
+        )
 
     if isinstance(position, dict):
         x = first_not_none(x, position.get("x"))

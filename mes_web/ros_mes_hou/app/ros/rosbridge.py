@@ -119,22 +119,19 @@ def build_module_confirm_publish_payload(
 ) -> Dict[str, Any]:
     """构造模块确认握手消息。
 
-    ROS 端 V2.1 会话式握手契约（module_confirme_node.py）：
-      - 请求 position = [100, station]，station=工位号 1~15；
-      - 模块号 = SEG（0~14），工位 N（1~15）→ SEG = N-1，故默认 station = module_id + 1；
-      - 回执 module_id 原样返回、device_id=0、position=[100|1]。
-    前端可用请求字段 station 显式指定工位号，覆盖默认推导。
+    V2.1 会话式握手契约（docs/ROS_MES_前后端ROS接口清单_三轴版_V2.1.md §6/§7.2）：
+      - position = [100, station]，station=工位号 1~15，由操作员选择确认第几组，
+        **前端必须显式传 station**，不做任何默认推导（推导错组会误握手物理工位）；
+      - module_id = 业务模块号，无范围限制，ROS 端原样回执用于 ACK 匹配；
+      - 回执：module_id 原样返回、device_id=0、position[0]=100 成功 / 1 失败。
     """
     profile = profile or get_active_profile()
-    module_id = int(module_id)
     if station is None:
-        station = module_id + 1
+        raise RosbridgeError("缺少工位号 station（1~15）：V2.1 握手要求前端显式下发，不做默认推导")
+    module_id = int(module_id)
     station = int(station)
     if not (1 <= station <= 15):
-        raise RosbridgeError(
-            f"工位号 station={station} 非法（ROS 端握手协议要求 1~15；"
-            f"模块号=SEG=工位-1，即 module_id 应在 0~14，或显式传 station）"
-        )
+        raise RosbridgeError(f"工位号 station={station} 非法（V2.1 握手协议要求 1~15）")
     return {
         "topic": profile.topics["module_cmd"],
         "message_type": profile.message_type("IntCmd"),
@@ -305,6 +302,39 @@ class RosbridgeClient:
             print(f"[紧急故障] 急停系统异常: {exc}")
             return False
 
+    async def publish_stop_release(self) -> bool:
+        """急停解除：/control/softstop_release（softstop_node 转发 /arm/cmd_vel [0x04]）。"""
+        if websockets is None:
+            print("[紧急故障] websockets 库未安装，无法发送急停解除指令")
+            return False
+
+        release_topic = self.profile.topics["softstop_release"]
+        release_msg = json.dumps(
+            {
+                "op": "publish",
+                "topic": release_topic,
+                "msg": {
+                    "header": {"stamp": _zero_stamp(self.profile), "frame_id": ""},
+                    "module_id": SYSTEM_MODULE_ID,
+                    "device_id": SYSTEM_DEVICE_ID,
+                    "position": [0x01],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        try:
+            async with websockets.connect(self.url, close_timeout=1) as ws:
+                await asyncio.wait_for(ws.send(release_msg), timeout=2.0)
+            print(f"[急停解除] 指令已发送: {release_topic}")
+            return True
+        except asyncio.TimeoutError:
+            print("[紧急故障] 急停解除 WebSocket 发送超时")
+            return False
+        except Exception as exc:
+            print(f"[紧急故障] 急停解除系统异常: {exc}")
+            return False
+
     async def stream_feedback(self) -> AsyncIterator[Dict[str, Any]]:
         if websockets is None:
             yield {"data_type": "error", "message": "missing websockets dependency"}
@@ -356,3 +386,6 @@ class RosbridgeTransport(RosDispatcher):
 
     async def trigger_emergency_stop(self) -> bool:
         return await self.client.publish_softstop()
+
+    async def release_emergency_stop(self) -> bool:
+        return await self.client.publish_stop_release()

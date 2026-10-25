@@ -108,7 +108,7 @@ async def activate_emergency_stop(
     """
     print(f"警告：操作员 {current_user.Username} 触发了紧急停止！")
     success = await get_ros_dispatcher().trigger_emergency_stop()
-    
+
     if success:
         return {
             "success": True,
@@ -117,3 +117,24 @@ async def activate_emergency_stop(
         }
     else:
         raise HTTPException(status_code=500, detail="急停指令发送失败，请检查 ROS 节点连接！")
+
+
+@router.post("/emergency_stop/release", response_model=EmergencyStopResponse)
+async def release_emergency_stop(
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    急停解除：/control/softstop_release → softstop_node 转发 /arm/cmd_vel [0x04]
+    （三轴版接口清单 §5：系统级指令 1=急停 / 4=解除 / 8=模块停）
+    """
+    print(f"操作员 {current_user.Username} 执行急停解除。")
+    success = await get_ros_dispatcher().release_emergency_stop()
+
+    if success:
+        return {
+            "success": True,
+            "message": "急停解除指令已成功下发至底层节点！",
+            "timestamp": datetime.now()
+        }
+    else:
+        raise HTTPException(status_code=500, detail="急停解除指令发送失败，请检查 ROS 节点连接！")

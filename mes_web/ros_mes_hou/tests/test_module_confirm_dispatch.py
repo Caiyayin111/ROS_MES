@@ -18,61 +18,60 @@ class DummyDispatcher:
 
 class ModuleConfirmDispatchTest(unittest.TestCase):
     def test_build_module_confirm_payload_matches_topic_contract(self):
-        # ROS 端 V2.1 握手契约：position=[100, station]，模块号=SEG=工位-1
-        payload = build_module_confirm_publish_payload(5)
+        # V2.1 握手契约（三轴版清单 §6）：position=[100, station]，station 前端必传；
+        # module_id 为业务模块号（无范围限制），ROS 端原样回执
+        payload = build_module_confirm_publish_payload(18, station=3)
 
         self.assertEqual(payload["topic"], "/control/module_cmd")
         self.assertEqual(payload["message_type"], "robot_control_backend/IntCmd")
-        self.assertEqual(payload["message"]["module_id"], 5)
+        self.assertEqual(payload["message"]["module_id"], 18)
         self.assertEqual(payload["message"]["device_id"], 0)
-        self.assertEqual(payload["message"]["position"], [100, 6])
+        self.assertEqual(payload["message"]["position"], [100, 3])
         self.assertIn("stamp", payload["message"]["header"])
 
-    def test_build_module_confirm_payload_accepts_explicit_station(self):
-        payload = build_module_confirm_publish_payload(5, station=3)
-
-        self.assertEqual(payload["message"]["module_id"], 5)
-        self.assertEqual(payload["message"]["position"], [100, 3])
-
-    def test_build_module_confirm_payload_rejects_out_of_range_module_id(self):
-        # module_id 18 → 推导工位 19 超出 1~15，必须在构造期就报错而不是等 ROS 端拒绝
+    def test_build_module_confirm_payload_requires_station(self):
+        # station 不做任何默认推导（推错组会误握手物理工位）
         with self.assertRaises(RosbridgeError):
             build_module_confirm_publish_payload(18)
+
+    def test_build_module_confirm_payload_rejects_out_of_range_station(self):
+        with self.assertRaises(RosbridgeError):
+            build_module_confirm_publish_payload(18, station=16)
 
     def test_lock_module_dispatches_module_confirm_topic_before_returning_success(self):
         dispatcher = DummyDispatcher()
 
         response = lock_and_dispatch_module(
-            {"x": 1, "y": 2, "module_id": 5, "device_id": 3, "position": 0},
+            {"x": 1, "y": 2, "module_id": 18, "device_id": 3, "position": 0, "station": 3},
             dispatcher=dispatcher,
         )
 
         self.assertEqual(response["code"], 200)
-        self.assertEqual(response["data"]["module_id"], 5)
+        self.assertEqual(response["data"]["module_id"], 18)
         self.assertEqual(response["dispatch"]["action"], "module_confirm")
         action, payload = dispatcher.calls[0]
         self.assertEqual(action, "module_confirm")
         self.assertEqual(payload["topic"], "/control/module_cmd")
         self.assertEqual(payload["message_type"], "robot_control_backend/IntCmd")
-        self.assertEqual(payload["message"]["module_id"], 5)
+        self.assertEqual(payload["message"]["module_id"], 18)
         self.assertEqual(payload["message"]["device_id"], 0)
-        self.assertEqual(payload["message"]["position"], [100, 6])
+        self.assertEqual(payload["message"]["position"], [100, 3])
         self.assertEqual(payload["business"]["x"], 1)
         self.assertEqual(payload["business"]["y"], 2)
         self.assertEqual(payload["business"]["device_id"], 3)
+        self.assertEqual(payload["business"]["station"], 3)
 
-    def test_lock_module_dispatches_with_explicit_station_from_request(self):
-        dispatcher = DummyDispatcher()
+    def test_lock_module_without_station_is_rejected_with_422(self):
+        from fastapi import HTTPException
 
-        response = lock_and_dispatch_module(
-            {"x": 1, "y": 2, "module_id": 5, "device_id": 3, "position": 0, "station": 2},
-            dispatcher=dispatcher,
-        )
+        with self.assertRaises(HTTPException) as ctx:
+            lock_and_dispatch_module(
+                {"x": 1, "y": 2, "module_id": 18, "device_id": 3, "position": 0},
+                dispatcher=DummyDispatcher(),
+            )
 
-        self.assertEqual(response["code"], 200)
-        action, payload = dispatcher.calls[0]
-        self.assertEqual(payload["message"]["position"], [100, 2])
-        self.assertEqual(payload["business"]["station"], 2)
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertIn("station", ctx.exception.detail)
 
     def test_module_confirm_dispatch_subscribes_success_topic_and_waits_for_matching_ack(self):
         sent_messages = []
@@ -90,12 +89,12 @@ class ModuleConfirmDispatchTest(unittest.TestCase):
             async def recv(self):
                 return (
                     '{"op":"publish","topic":"/hardware/module_confirm_success",'
-                    '"msg":{"module_id":5,"device_id":0,"position":[100]}}'
+                    '"msg":{"module_id":18,"device_id":0,"position":[100]}}'
                 )
 
         dispatcher = RosbridgeClient(
             ROS1_PROFILE, url="ws://test", timeout=0.1, module_confirm_timeout=0.1)
-        payload = build_module_confirm_publish_payload(5)
+        payload = build_module_confirm_publish_payload(18, station=3)
 
         with patch("app.ros.rosbridge.websockets") as websockets_mock:
             websockets_mock.connect = Mock(return_value=FakeWebSocket())
@@ -126,12 +125,12 @@ class ModuleConfirmDispatchTest(unittest.TestCase):
             async def recv(self):
                 return (
                     '{"op":"publish","topic":"/hardware/web_module_cmd",'
-                    '"msg":{"module_id":5,"device_id":0,"position":[1]}}'
+                    '"msg":{"module_id":18,"device_id":0,"position":[1]}}'
                 )
 
         dispatcher = RosbridgeClient(
             ROS1_PROFILE, url="ws://test", timeout=0.1, module_confirm_timeout=0.1)
-        payload = build_module_confirm_publish_payload(5)
+        payload = build_module_confirm_publish_payload(18, station=3)
 
         with patch("app.ros.rosbridge.websockets") as websockets_mock:
             websockets_mock.connect = Mock(return_value=FakeWebSocket())

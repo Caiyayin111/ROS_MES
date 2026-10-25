@@ -41,6 +41,7 @@ TOPIC_DEFAULTS: Dict[str, str] = {
     "module_confirm_success": "/hardware/module_confirm_success",
     "module_confirm_failed": "/hardware/web_module_cmd",
     "softstop": "/control/softstop",
+    "softstop_release": "/control/softstop_release",
 }
 
 

@@ -121,10 +121,10 @@
 }
 ```
 
-- ROS 消息（IntCmd）：`module_id`（前端计算 `x*16+y`；V2.1 起须落在 0~14，见下）、`device_id=0`（模块级指令）、`position=[100, station]`（V2.1 会话式握手：100=触发，station=工位号 1~15）
-  - V2.1 ROS 端契约（`module_confirme_node.py`）：模块号 = SEG（0~14），工位 N（1~15）→ SEG = N-1；后端默认 `station = module_id + 1`，前端也可在请求体显式传 `station` 覆盖
+- ROS 消息（IntCmd）：`module_id`（业务模块号，无范围限制，ROS 端原样回执）、`device_id=0`（模块级指令）、`position=[100, station]`（V2.1 会话式握手：100=触发，station=工位号 1~15）
+  - V2.1 契约（三轴版清单 §6/§7.2）：station=工位号 1~15，由操作员选择确认第几组，**前端必须显式传 `station` 字段**，后端不做默认推导
 - 确认机制：发布后订阅 `/hardware/module_confirm_success` 与 `/hardware/web_module_cmd`；回包 `module_id` 原样返回、`position[0]==100` 成功、`position[0]==1` 失败（HTTP 502）
-- x/y 缺失 → 422；工位号推导越界（module_id 不在 0~14 且未显式传 station）→ 422
+- x/y 缺失 → 422；缺 station → 422；station 越界 → 422
 
 ---
 
@@ -744,7 +744,7 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 - ROS1 / ROS2 的适配器分别为 `app/ros/ros1/Ros1Dispatcher`、`app/ros/ros2/Ros2Dispatcher`，共用 `app/ros/rosbridge.py` 传输层；本文档第 4、5 节记录的话题与消息格式即 ROS1 现网契约，ROS2 端移植定稿后由 ROS 端同步确认差异表。
 - 急停 `/control/softstop` 沿用现网 typeless publish（不带 advertise/type）；若 ROS2 端收不到，再补 `advertise`。
 - ~~已知协议不一致①：模块确认失败码~~ **已解决**——ROS 端 V2.1（`module_confirme_node.py`）已把 `RESULT_FAILED` 对齐为 `1`，与后端/文档一致；同时握手升级为会话式 `position=[100, station]`（见第 2 节）。
-- 已知协议不一致②（**未修**，待与 ROS 端确认）：图纸路径话题——后端发 `/frontend_pointcloud_topic`，ROS 端 `rob_arm.env` 中 `data_process_node` 实际订阅 `/control/frontend_pointcloud_topic`（文档写的也是无前缀版）。
+- ~~已知协议不一致②：图纸路径话题~~ **已闭环（2026-10-25，以三轴版清单为准）**——后端发布的 `/frontend_pointcloud_topic`（无前缀）即为准；ROS 端已推送的 `rob_arm.env` 中 `ROS_TOPIC_FRONTEND_POINTCLOUD=/control/frontend_pointcloud_topic` 与清单矛盾，由 ROS 端修正其 env，后端不预留改动（必要时可用 `ROS_TOPIC_DRAWING_PATH` 环境变量覆盖）。
 
 ---
 
