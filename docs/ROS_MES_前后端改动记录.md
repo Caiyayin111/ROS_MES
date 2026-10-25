@@ -20,6 +20,7 @@
   - **新增**：`POST /api/control/emergency_stop/release`（急停解除，登录态）；种子数据补齐 5 臂（Unit_ID 128/160，延续每臂 +32；sensor_ID 同规律），`armIndexFromUnitId` 的 3 臂限制随之解除
   - **前端待办**：① 模块锁定页加"确认第几组"选择并把 `station` 带进 `/module/` 请求；② FineTuningPage 按 `cmd_ack`（result=3）提示超位拒绝；③ 伸缩 °→mm 换算（系数待 ROS 确认）
   - **仍待 ROS 端**：① rob_arm.env 图纸话题前缀修正；② MM_PER_REV 真实值（0.7 为假设值）；③（低优先）ROS2 移植时间表/包名/是否继续走 rosbridge
+  - 文档结构决定：**不按 ROS1/ROS2 拆两份接口文档**（契约版本无关，双份必然漂移）；三轴版清单末尾新增"§8 ROS1/ROS2 差异速查表"（类型串/stamp 字段/原生通道/部署四项差异 + 对 ROS2 移植的契约要求），代码层差异真相在 `app/ros/profile.py`；部署文档等 ROS2 动工时再在 `deploy/` 单独成文
 
 ## 2026-10-25（三）
 
