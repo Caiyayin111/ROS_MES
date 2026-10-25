@@ -14,6 +14,7 @@ const result = ref("");
 
 // 测试用 ID 改为输入框可调（默认值为 V2 有效编码：模块18=(1,2)，device_id 1=一号臂旋转轴）
 const testModuleId = ref(18);
+const testStation = ref(1); // V2.1 模块确认握手：工位号 1~15，后端必传
 const testDeviceId = ref(1);
 const testUnitId = ref(32);
 const testUnitRowId = ref(1);
@@ -44,6 +45,7 @@ const handleCreateModule = async () => {
     module_id: Number(testModuleId.value),
     device_id: Number(testDeviceId.value),
     position: 0,
+    station: Number(testStation.value),
   });
 
   showResult(res);
@@ -103,6 +105,8 @@ const handleFineTuning = async () => {
       </div>
 
       <div class="row">
+        <span>station（工位号）：</span>
+        <el-input-number v-model="testStation" :min="1" :max="15" />
         <span>module_id：</span>
         <el-input-number v-model="testModuleId" :min="17" :max="136" />
         <span>device_id：</span>
