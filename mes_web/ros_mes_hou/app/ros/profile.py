@@ -31,6 +31,9 @@ TOPIC_DEFAULTS: Dict[str, str] = {
     "feedback_telescope": "/hardware/telescope_feedback",
     "feedback_sensor": "/hardware/sensor_feedback",
     "feedback_imu": "/hardware/imu_angles",
+    # V2 新增：独立压力平均值话题（不再与瞬时值同话题混流）与失压事件话题
+    "feedback_pressure_avg": "/hardware/pressure_avg",
+    "feedback_vacuum_loss": "/hardware/vacuum_loss",
     "drawing_path": "/frontend_pointcloud_topic",
     "module_cmd": "/control/module_cmd",
     "module_confirm_success": "/hardware/module_confirm_success",

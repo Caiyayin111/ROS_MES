@@ -30,8 +30,9 @@ class RosProfileDialectTest(unittest.TestCase):
         self.assertEqual(fine["message_type"], "robot_control_backend/msg/RotationCmd")
         self.assertEqual(sorted(fine["message"]["header"]["stamp"]), ["nanosec", "sec"])
 
-        module = build_module_confirm_publish_payload(18, profile=ROS2_PROFILE)
+        module = build_module_confirm_publish_payload(5, profile=ROS2_PROFILE)
         self.assertEqual(module["message_type"], "robot_control_backend/msg/IntCmd")
+        self.assertEqual(module["message"]["position"], [100, 6])
         self.assertEqual(sorted(module["message"]["header"]["stamp"]), ["nanosec", "sec"])
 
         drawing = build_drawing_path_publish_payload("a/b.json", profile=ROS2_PROFILE)
@@ -39,7 +40,7 @@ class RosProfileDialectTest(unittest.TestCase):
 
     def test_default_builders_keep_ros1_contract(self):
         with patch.dict(os.environ, {"ROS_VERSION": "1"}):
-            module = build_module_confirm_publish_payload(18)
+            module = build_module_confirm_publish_payload(5)
             self.assertEqual(module["message_type"], "robot_control_backend/IntCmd")
             self.assertEqual(sorted(module["message"]["header"]["stamp"]), ["nsecs", "secs"])
 

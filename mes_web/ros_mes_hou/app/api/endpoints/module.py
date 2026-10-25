@@ -38,6 +38,9 @@ def lock_and_dispatch_module(payload: dict = Body(...), dispatcher=None):
     position = payload.get("position")
     module_id = payload.get("module_id")
     device_id = payload.get("device_id")
+    # ROS 端 V2.1 握手契约：position=[100, station]；station 可由前端显式下发，
+    # 缺省按"模块号=SEG=工位-1"推导（station = module_id + 1）
+    station_raw = first_not_none(payload.get("station"), payload.get("Station"))
 
     if isinstance(position, dict):
         x = first_not_none(x, position.get("x"))
@@ -51,6 +54,7 @@ def lock_and_dispatch_module(payload: dict = Body(...), dispatcher=None):
         y = int(y)
         module_id = int(module_id) if module_id is not None else x * 16 + y
         device_id = int(device_id) if device_id is not None else None
+        station = int(station_raw) if station_raw is not None else None
     except (TypeError, ValueError):
         raise HTTPException(status_code=422, detail="invalid module parameters")
 
@@ -59,10 +63,15 @@ def lock_and_dispatch_module(payload: dict = Body(...), dispatcher=None):
         "y": y,
         "module_id": module_id,
         "device_id": device_id,
+        "station": station,
         "position": position,
         "raw": payload,
     }
-    ros_payload = build_module_confirm_publish_payload(module_id)
+
+    try:
+        ros_payload = build_module_confirm_publish_payload(module_id, station=station)
+    except RosbridgeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     ros_payload["business"] = dispatch_payload
 
     try:

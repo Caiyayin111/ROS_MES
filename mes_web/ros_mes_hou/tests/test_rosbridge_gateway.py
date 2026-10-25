@@ -94,6 +94,26 @@ class RosbridgeGatewayTest(unittest.TestCase):
 
         self.assertEqual(feedback["data_type"], "rotation_axis_encoder")
 
+    def test_normalize_pressure_average_topic_branches_before_label_table(self):
+        # V2 新增：/hardware/pressure_avg 独立平均值话题（不再与瞬时值混流）
+        feedback = normalize_feedback_message(
+            "/hardware/pressure_avg",
+            {"module_id": 17, "device_id": 22, "position": [12.5]},
+        )
+
+        self.assertEqual(feedback["data_type"], "pressure_average")
+        self.assertEqual(feedback["feedback_type"], "臂2压力平均值(5s窗口)")
+
+    def test_normalize_vacuum_loss_topic_branches_before_label_table(self):
+        # V2 新增：/hardware/vacuum_loss 失压事件话题
+        feedback = normalize_feedback_message(
+            "/hardware/vacuum_loss",
+            {"module_id": 17, "device_id": 23, "position": [1]},
+        )
+
+        self.assertEqual(feedback["data_type"], "vacuum_loss_event")
+        self.assertEqual(feedback["feedback_type"], "臂3吸盘失压告警")
+
 
 if __name__ == "__main__":
     unittest.main()

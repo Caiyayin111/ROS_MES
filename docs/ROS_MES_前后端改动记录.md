@@ -11,6 +11,15 @@
 
 ---
 
+## 2026-10-25（二）
+
+- 整合远端 main（ROS 端 V2.1 更新）并适配新协议（已完成，**全套 40 passed 全绿**）
+  - 远端新增：ROS 端会话式模块确认（`module_confirme_node.py` V2.1 + `UidAnnounce/SegAssign/SegConfirm.msg`）、`pressure_avg`/`vacuum_loss` 两路反馈话题、`can_event_log` 表（`sqlite_create.py`，合并时经重命名追踪自动落到 `mes_web/ros_mes_hou/`）
+  - 旧路径 `rosbridge_gateway.py` 的远端改动（两路新话题）已移植进 `app/ros/`（profile 话题表 + normalizer 分支 + 反馈流订阅列表）
+  - **模块确认契约变更（前端需配合）**：ROS 端 V2.1 要求 `position=[100, station]`，station=工位号 1~15，模块号=SEG=工位-1；后端默认 `station = module_id + 1`（module_id 须在 0~14），前端可在 `/module/` 请求体显式传 `station` 覆盖；`module_id=18` 这类越界值现在构造期就报 422。**前端 ModuleManagement 若下发 x*16+y 的大模块号会被拒，需和 ROS 端对齐模块号→工位映射**（`???` 待确认：前端 x*16+y 编码与 SEG 0~14 的对应关系）
+  - 好消息：改动记录 2026-10-25（一）里的协议不一致①（失败码 -1 vs 1）**ROS 端已在 V2.1 修复**（`RESULT_FAILED = 1`）；不一致②（图纸话题 `/control` 前缀）仍未解决
+- PR 评审（进行中，见下一条）
+
 ## 2026-10-25（一）
 
 - 仓库结构调整：前后端归入 `mes_web/`（已完成，全套 27 passed 全绿）

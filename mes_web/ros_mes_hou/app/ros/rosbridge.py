@@ -114,16 +114,34 @@ def build_drawing_path_publish_payload(
 def build_module_confirm_publish_payload(
     module_id: int,
     profile: RosProfile | None = None,
+    station: int | None = None,
 ) -> Dict[str, Any]:
+    """构造模块确认握手消息。
+
+    ROS 端 V2.1 会话式握手契约（module_confirme_node.py）：
+      - 请求 position = [100, station]，station=工位号 1~15；
+      - 模块号 = SEG（0~14），工位 N（1~15）→ SEG = N-1，故默认 station = module_id + 1；
+      - 回执 module_id 原样返回、device_id=0、position=[100|1]。
+    前端可用请求字段 station 显式指定工位号，覆盖默认推导。
+    """
     profile = profile or get_active_profile()
+    module_id = int(module_id)
+    if station is None:
+        station = module_id + 1
+    station = int(station)
+    if not (1 <= station <= 15):
+        raise RosbridgeError(
+            f"工位号 station={station} 非法（ROS 端握手协议要求 1~15；"
+            f"模块号=SEG=工位-1，即 module_id 应在 0~14，或显式传 station）"
+        )
     return {
         "topic": profile.topics["module_cmd"],
         "message_type": profile.message_type("IntCmd"),
         "message": {
             "header": {"stamp": _stamp(profile), "frame_id": ""},
-            "module_id": int(module_id),
+            "module_id": module_id,
             "device_id": 0,
-            "position": [100],
+            "position": [100, station],
         },
     }
 
@@ -226,8 +244,8 @@ class RosbridgeClient:
             device_id = int(msg.get("device_id", -1))
             position = msg.get("position") or []
 
-            # ??? 已知协议不一致（本次不修，已记录在改动记录）：ROS 端
-            # module_confirme_node 实际发布失败码 -1，这里沿用文档/现网行为只识别 1
+            # 失败码契约：ROS 端 V2.1 已将 RESULT_FAILED 对齐为 1（此前发 -1 的
+            # 不一致已由 ROS 端修复），这里维持 position[0]==1 判失败
             if (
                 topic == failed_topic
                 and module_id == expected_module_id
@@ -286,7 +304,8 @@ class RosbridgeClient:
         feedback_topics = [
             self.profile.topics[key]
             for key in ("feedback_rotation", "feedback_swing", "feedback_telescope",
-                        "feedback_sensor", "feedback_imu")
+                        "feedback_sensor", "feedback_imu",
+                        "feedback_pressure_avg", "feedback_vacuum_loss")
         ]
 
         try:

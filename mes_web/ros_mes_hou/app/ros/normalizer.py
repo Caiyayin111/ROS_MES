@@ -56,8 +56,15 @@ def normalize_feedback_message(
     """归一化一条反馈消息；topics 缺省用默认话题表（与 profile.topics 同构）。"""
     topics = topics or TOPIC_DEFAULTS
     device_id = int(msg.get("device_id", 0))
+    # 新话题分支先于默认表查找，保证标签稳定（即使 FEEDBACK_LABELS 未覆盖）
+    if topic == topics["feedback_pressure_avg"] and 21 <= device_id <= 25:
+        data_type = "pressure_average"
+        feedback_type = f"臂{device_id - 20}压力平均值(5s窗口)"
+    elif topic == topics["feedback_vacuum_loss"] and 21 <= device_id <= 25:
+        data_type = "vacuum_loss_event"
+        feedback_type = f"臂{device_id - 20}吸盘失压告警"
     # 臂级 21~25：IMU 话题识别为陀螺仪，其余按压力传感器
-    if topic == topics["feedback_imu"] and 21 <= device_id <= 25:
+    elif topic == topics["feedback_imu"] and 21 <= device_id <= 25:
         data_type, feedback_type = IMU_FEEDBACK_LABEL[0], f"臂{device_id - 20}陀螺仪姿态"
     else:
         data_type, feedback_type = FEEDBACK_LABELS.get(device_id, ("unknown", "unknown feedback"))
