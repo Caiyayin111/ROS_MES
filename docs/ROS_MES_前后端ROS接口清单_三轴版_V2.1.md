@@ -4,7 +4,7 @@
 >
 > **后端已处理项**（同日提交，勿重复修改）：7.1 模块确认回执超时已调至 35s（`ROS_MODULE_CONFIRM_ACK_WAIT_S`）；7.2 后端已按 §7.2 实现——`/module/` 请求体 **station 必传**（操作员选组，后端不做默认推导），module_id 保持业务模块号原样回执；7.3 的后端部分（校验 1~15、反馈标签表三轴化）已完成，且种子数据已补齐 5 臂（Unit_ID 128/160，延续每臂 +32 规律）；7.4 的 `/hardware/cmd_ack` 已加入反馈流，**枚举已从源码提取**：仅超位拒绝一种（`ack_msg=1, result=3, detail=1上限/2下限`），无成功回执；7.8 已解决（旧 rospy 路径迁入 `app/ros/ros1/native.py`）。**前端已处理项**：`deviceEncoding.ts` 已改三轴编码。**新增**：急停解除接口 `POST /api/control/emergency_stop/release`（发布 `/control/softstop_release`，softstop_node 源码确认转发 `[0x04]`）。
 >
-> **待 ROS 端修正**：已推送的 `rob_arm.env` 中 `ROS_TOPIC_FRONTEND_POINTCLOUD=/control/frontend_pointcloud_topic` 与本文档 §2/§3 的 `/frontend_pointcloud_topic`（无前缀）矛盾——按本文档为准，请 ROS 端修正 env。
+> **图纸话题已定论**（2026-10-25 ROS 端确认"按接口的来"）：话题以本文档 `/frontend_pointcloud_topic`（无前缀）为准，ROS 端自行将其 `rob_arm.env` 的 `ROS_TOPIC_FRONTEND_POINTCLOUD` 改为无前缀；后端零改动。联调时验证一次"图纸下发 → 三视图"链路即可。
 
 ---
 
@@ -129,9 +129,10 @@ ROS 侧超时参数（rob_arm.env）：等宣告 `MODULE_CONFIRM_WAIT_ANNOUNCE_S
 
 `/hardware/cmd_ack` 已加入后端反馈流（`data_type=cmd_ack`，透传 `result/detail`）。前端 FineTuningPage 可按该标签提示"超位被拒绝"。
 
-### 🟡 7.5 伸缩反馈单位是"度"不是"mm"（**待办，前端**）
+### 🟡 7.5 伸缩反馈单位是"度"不是"mm"（**挂起：等下位机给真实系数**）
 
-`/hardware/telescope_feedback` 的 position 为电机转角（°）。前端若按 mm 展示会差 `MM_PER_REV/360` 倍（当前 MM_PER_REV=0.7 假设值）。要么前端换算，要么 ROS 侧加一路 mm 话题。
+`/hardware/telescope_feedback` 的 position 为电机转角（°）。前端若按 mm 展示会差 `MM_PER_REV/360` 倍（当前 MM_PER_REV=0.7）。
+**2026-10-25 ROS 端确认：0.7 为占位值，换算还没测完，真实系数等下位机提供。** 拿到真值后的动作：ROS 端改 `rob_arm.env` 与 `deploy/config/rob_arm.env` 两处；前端用同一系数补反馈"度→mm"显示换算。在那之前前端不做换算，伸缩反馈数值按"度"理解。
 
 ### 🟡 7.6 反馈 module_id 是 SEG，不是业务模块号
 
