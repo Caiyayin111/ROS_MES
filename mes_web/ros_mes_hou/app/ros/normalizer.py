@@ -11,19 +11,19 @@ from typing import Any, Dict, Optional
 
 from app.ros.profile import TOPIC_DEFAULTS
 
-# V2 device_id → 反馈标签
-#   旋转 J1：1,5,9,13,17；摆动 J2：2,6,10,14,18；伸缩 J4：4,8,12,16,20
+# V2.1 三轴 device_id → 反馈标签
+#   旋转=关节1：1,4,7,10,13；摆动=关节2：2,5,8,11,14；伸缩=关节3：3,6,9,12,15
 #   压力/IMU 同为臂级 21~25，按话题区分（见 normalize_feedback_message）
 def _build_feedback_labels() -> Dict[int, tuple]:
     labels: Dict[int, tuple] = {}
     type_by_joint = {
         0: ("rotation_axis_encoder", "旋转轴编码器"),
         1: ("swing_axis_encoder", "摆动轴编码器"),
-        3: ("telescope_axis_encoder", "伸缩轴编码器"),
+        2: ("telescope_axis_encoder", "伸缩轴编码器"),
     }
     for arm in range(1, 6):                       # 臂 1~5
         for joint, (data_type, name) in type_by_joint.items():
-            axis = (arm - 1) * 4 + joint + 1      # 4轴ID布局
+            axis = (arm - 1) * 3 + joint + 1      # 三轴ID布局（臂1=1/2/3 … 臂5=13/14/15）
             labels[axis] = (data_type, f"臂{arm}{name}")
     for arm in range(1, 6):
         labels[20 + arm] = ("pressure_sensor", f"臂{arm}压力传感器")
@@ -56,8 +56,11 @@ def normalize_feedback_message(
     """归一化一条反馈消息；topics 缺省用默认话题表（与 profile.topics 同构）。"""
     topics = topics or TOPIC_DEFAULTS
     device_id = int(msg.get("device_id", 0))
+    # 指令回执（CmdAck：超位拒绝等）先于默认表查找，避免轴号被套上编码器标签
+    if topic == topics["feedback_cmd_ack"]:
+        data_type, feedback_type = "cmd_ack", "指令回执"
     # 新话题分支先于默认表查找，保证标签稳定（即使 FEEDBACK_LABELS 未覆盖）
-    if topic == topics["feedback_pressure_avg"] and 21 <= device_id <= 25:
+    elif topic == topics["feedback_pressure_avg"] and 21 <= device_id <= 25:
         data_type = "pressure_average"
         feedback_type = f"臂{device_id - 20}压力平均值(5s窗口)"
     elif topic == topics["feedback_vacuum_loss"] and 21 <= device_id <= 25:
@@ -93,6 +96,16 @@ def normalize_feedback_message(
                 "x": _float_value(msg.get("x")),
                 "y": _float_value(msg.get("y")),
                 "z": _float_value(msg.get("z")),
+            }
+        )
+
+    if data_type == "cmd_ack":
+        # CmdAck 专有字段：ack_msg=回执类型 / result=结果码（3=超位拒绝）/ detail=明细（1上限 2下限）
+        normalized.update(
+            {
+                "ack_msg": msg.get("ack_msg"),
+                "result": msg.get("result"),
+                "detail": msg.get("detail"),
             }
         )
 

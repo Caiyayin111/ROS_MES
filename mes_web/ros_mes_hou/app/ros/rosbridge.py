@@ -21,8 +21,9 @@ from app.ros.base import RosDispatcher, RosbridgeError
 from app.ros.normalizer import normalize_feedback_message
 from app.ros.profile import RosProfile, get_active_profile
 
-# V2：module_id / device_id 不做静态配置，全部取自前端微调请求（record.module_id / record.device_id）
-# device_id 即 AXIS 寻址单元：1~20=轴号（J1旋转 1,5,9,13,17 / J2摆动 2,6,10,14,18 / J4伸缩 4,8,12,16,20），21~25=臂级
+# V2.1：module_id / device_id 不做静态配置，全部取自前端微调请求（record.module_id / record.device_id）
+# device_id 即 AXIS 寻址单元（V2.1 三轴布局）：1~15=轴号（每臂 关节1=旋转/2=摆动/3=伸缩，
+# 臂1=1/2/3、臂2=4/5/6 … 臂5=13/14/15），21~25=臂级
 
 # V2：全局急停为系统级指令，module_id=0 / device_id=0（不使用静态模块编号），
 # softstop_node 收到后转发 position=[0x01] 全局急停
@@ -78,9 +79,9 @@ def build_fine_tuning_publish_payload(
     except (TypeError, ValueError):
         raise RosbridgeError(
             f"invalid module_id/device_id: module_id={module_id!r}, device_id={device_id!r}")
-    # V2：微调轴 device_id 必须落在 1~20 轴号空间
-    if not (1 <= device_id <= 20):
-        raise RosbridgeError(f"微调 device_id={device_id} 非法（V2 允许轴号 1~20）")
+    # V2.1 三轴布局：微调轴 device_id 必须落在 1~15 轴号空间
+    if not (1 <= device_id <= 15):
+        raise RosbridgeError(f"微调 device_id={device_id} 非法（V2.1 三轴布局允许轴号 1~15）")
     if module_id <= 0:
         raise RosbridgeError(f"微调 module_id={module_id} 非法（必须由前端下发正整数模块号）")
 
@@ -149,10 +150,18 @@ def build_module_confirm_publish_payload(
 class RosbridgeClient:
     """rosbridge WebSocket 一次性客户端：每次下发新建连接，subscribe 后逐条收事件。"""
 
-    def __init__(self, profile: RosProfile, url: str | None = None, timeout: float = 5.0):
+    def __init__(
+        self,
+        profile: RosProfile,
+        url: str | None = None,
+        timeout: float = 5.0,
+        module_confirm_timeout: float | None = None,
+    ):
         self.profile = profile
         self.url = url or settings.ROSBRIDGE_URL
         self.timeout = timeout
+        # 模块确认回执等待上限：V2.1 会话式握手含 30s 等宣告窗口，必须远大于普通超时
+        self.module_confirm_timeout = module_confirm_timeout or settings.MODULE_CONFIRM_ACK_WAIT_S
 
     def dispatch(self, action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         if action not in {"fine_tuning", "drawing_path", "module_confirm"}:
@@ -227,7 +236,7 @@ class RosbridgeClient:
         failed_topic = self.profile.topics["module_confirm_failed"]
 
         while True:
-            raw = await asyncio.wait_for(ws.recv(), self.timeout)
+            raw = await asyncio.wait_for(ws.recv(), self.module_confirm_timeout)
             try:
                 event = json.loads(raw)
             except json.JSONDecodeError:
@@ -305,7 +314,8 @@ class RosbridgeClient:
             self.profile.topics[key]
             for key in ("feedback_rotation", "feedback_swing", "feedback_telescope",
                         "feedback_sensor", "feedback_imu",
-                        "feedback_pressure_avg", "feedback_vacuum_loss")
+                        "feedback_pressure_avg", "feedback_vacuum_loss",
+                        "feedback_cmd_ack")
         ]
 
         try:

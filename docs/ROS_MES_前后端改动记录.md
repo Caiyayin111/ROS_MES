@@ -11,6 +11,16 @@
 
 ---
 
+## 2026-10-25（三）
+
+- 对齐《三轴版 V2.1 接口清单》（ROS 端三轴化，每臂 3 轴，轴号 1~15）（已完成，**45 passed 全绿**，前端 build 通过）
+  - 文档已收录进 `docs/ROS_MES_前后端ROS接口清单_三轴版_V2.1.md`（取代旧接口文档的 ROS 部分，旧文档已加横幅）；清单 §7 各项处理状态见该文档标注
+  - P0 模块确认：回执等待超时与普通超时分离，默认 35s（`ROS_MODULE_CONFIRM_ACK_WAIT_S`，对齐 ROS 端 30s 等宣告窗口，否则必然 502）
+  - P0 三轴化：后端反馈标签表 `(臂-1)*3+关节`（臂1=1/2/3 … 臂5=13/14/15）、微调校验 1~15；前端 `deviceEncoding.ts` 同步（`AXES_PER_ARM=3`、偏移 `{1,2,3}`、臂级 21~25 不变）
+  - P1 `/hardware/cmd_ack` 加入反馈流（`data_type=cmd_ack`，透传 `ack_msg/result/detail`）——超位拒绝不再静默丢失
+  - **待办交接**：① 前端 ModuleManagement 需让操作员选"确认第几组"并传 `station`（7.2，后端已支持）；② 伸缩反馈 °→mm 换算（7.5，MM_PER_REV=0.7 是假设值，待 ROS 确认）；③ 种子数据仅 3 臂，`armIndexFromUnitId` 无法识别臂 4/5（7.3，需补种子或改映射）；④ 反馈 `module_id` 是 SEG 不是业务模块号（7.6，按 module_id 关联的逻辑会错）
+  - **`???` 与 ROS 端核对**：图纸路径话题——三轴版清单写 `/frontend_pointcloud_topic`（无前缀），但已推送的 `rob_arm.env` 仍是 `/control/frontend_pointcloud_topic`，文档与源码矛盾，以哪边为准需 ROS 端确认（此前记录的协议不一致②仍未闭环）
+
 ## 2026-10-25（二）
 
 - 整合远端 main（ROS 端 V2.1 更新）并适配新协议（已完成，**全套 40 passed 全绿**）

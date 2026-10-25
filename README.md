@@ -68,7 +68,8 @@ npm run dev
 
 | 文档 | 说明 |
 |---|---|
-| [docs/ROS_MES_前后端接口字段文档.md](docs/ROS_MES_前后端接口字段文档.md) | 前后端全部 API、WebSocket、ROS 话题与消息字段（**对接必读**） |
+| [docs/ROS_MES_前后端ROS接口清单_三轴版_V2.1.md](docs/ROS_MES_前后端ROS接口清单_三轴版_V2.1.md) | **ROS 对接必读**：三轴版话题/消息/device_id 契约（2026-10-24，取代旧文档 ROS 部分） |
+| [docs/ROS_MES_前后端接口字段文档.md](docs/ROS_MES_前后端接口字段文档.md) | REST 业务接口、WebSocket、数据库表字段（ROS 部分已被三轴版取代） |
 | [docs/ROS_MES_前后端命名规范.md](docs/ROS_MES_前后端命名规范.md) | 前后端命名规范与速查卡（**新代码必读**） |
 | [docs/ROS_MES_前后端改动记录.md](docs/ROS_MES_前后端改动记录.md) | 交接日志：边改边记录，含遗留问题与版本待办 |
 | [docs/ROS_MES_前端V1.0到V1.1修改清单.md](docs/ROS_MES_前端V1.0到V1.1修改清单.md) | 前端 V1.1 适配执行记录（26 项核对结论） |

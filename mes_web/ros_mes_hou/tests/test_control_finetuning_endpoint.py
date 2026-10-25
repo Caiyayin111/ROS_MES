@@ -65,11 +65,12 @@ class ControlFineTuningEndpointTest(unittest.TestCase):
             db.close()
 
     def test_send_fine_tuning_maps_all_axis_parameters_to_ros_topics(self):
-        # V2 轴号：一号臂 J1 旋转=1 / J2 摆动=2 / J4 伸缩=4，请求 device_id 原样透传
+        # V2.1 三轴：轴号 1~15 透传（一号臂 旋转=1/摆动=2/伸缩=3；4 亦为合法轴号=臂2旋转），
+        # 请求 device_id 原样透传进 ROS 消息
         cases = [
             ("rotation", "/control/adjust_rotation_cmd", 1),
             ("swing", "/control/adjust_swing_cmd", 2),
-            ("telescopic", "/control/adjust_telescopic_cmd", 4),
+            ("telescopic", "/control/adjust_telescopic_cmd", 3),
         ]
 
         for parameter_name, expected_topic, expected_device_id in cases:

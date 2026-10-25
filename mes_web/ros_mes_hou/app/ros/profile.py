@@ -34,6 +34,8 @@ TOPIC_DEFAULTS: Dict[str, str] = {
     # V2 新增：独立压力平均值话题（不再与瞬时值同话题混流）与失压事件话题
     "feedback_pressure_avg": "/hardware/pressure_avg",
     "feedback_vacuum_loss": "/hardware/vacuum_loss",
+    # V2.1：轴节点指令回执（超位拒绝等 CmdAck），转发前端 otherwise 静默丢失
+    "feedback_cmd_ack": "/hardware/cmd_ack",
     "drawing_path": "/frontend_pointcloud_topic",
     "module_cmd": "/control/module_cmd",
     "module_confirm_success": "/hardware/module_confirm_success",

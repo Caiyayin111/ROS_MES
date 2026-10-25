@@ -41,6 +41,9 @@ class Settings:
     )
     # rosbridge WebSocket 地址（ROS1/ROS2 通用；ROS_VERSION 环境变量见 app/ros/profile.py）
     ROSBRIDGE_URL: str = os.getenv("ROSBRIDGE_URL", "ws://localhost:9010")
+    # 模块确认会话式握手的回执等待上限。
+    # ROS 端 V2.1：等宣告窗口 30s（含操作员上电）+ 确认重试，后端必须 ≥35s，否则必然 502
+    MODULE_CONFIRM_ACK_WAIT_S: float = float(os.getenv("ROS_MODULE_CONFIRM_ACK_WAIT_S", "35.0"))
     BACKEND_CORS_ORIGINS: List[str] = [
         origin.strip()
         for origin in os.getenv("BACKEND_CORS_ORIGINS", "*").split(",")

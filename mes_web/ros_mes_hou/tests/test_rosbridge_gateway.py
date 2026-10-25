@@ -23,11 +23,11 @@ class RosbridgeGatewayTest(unittest.TestCase):
         self.assertEqual(feedback["feedback_type"], "臂1旋转轴编码器")
 
     def test_normalize_axis_feedback_uses_feedback_device_ids(self):
-        # V2 4 轴 ID 布局：每臂 J1 旋转 / J2 摆动 / J3 空置 / J4 伸缩
+        # V2.1 三轴 3 轴 ID 布局：每臂 关节1=旋转 / 关节2=摆动 / 关节3=伸缩
         cases = [
             ("/hardware/rotation_feedback", 1, "rotation_axis_encoder", "臂1旋转轴编码器"),
-            ("/hardware/swing_feedback", 6, "swing_axis_encoder", "臂2摆动轴编码器"),
-            ("/hardware/telescope_feedback", 12, "telescope_axis_encoder", "臂3伸缩轴编码器"),
+            ("/hardware/swing_feedback", 5, "swing_axis_encoder", "臂2摆动轴编码器"),
+            ("/hardware/telescope_feedback", 9, "telescope_axis_encoder", "臂3伸缩轴编码器"),
         ]
 
         for topic, device_id, data_type, feedback_type in cases:
@@ -87,12 +87,13 @@ class RosbridgeGatewayTest(unittest.TestCase):
 
     def test_normalize_imu_topic_with_axis_device_id_falls_back_to_labels(self):
         # 臂级 21~25 之外的 device_id 走 FEEDBACK_LABELS，不按 IMU 处理
+        # （V2.1 三轴布局下 9 = 臂3关节3伸缩）
         feedback = normalize_feedback_message(
             "/hardware/imu_angles",
             {"module_id": 17, "device_id": 9},
         )
 
-        self.assertEqual(feedback["data_type"], "rotation_axis_encoder")
+        self.assertEqual(feedback["data_type"], "telescope_axis_encoder")
 
     def test_normalize_pressure_average_topic_branches_before_label_table(self):
         # V2 新增：/hardware/pressure_avg 独立平均值话题（不再与瞬时值混流）
@@ -113,6 +114,18 @@ class RosbridgeGatewayTest(unittest.TestCase):
 
         self.assertEqual(feedback["data_type"], "vacuum_loss_event")
         self.assertEqual(feedback["feedback_type"], "臂3吸盘失压告警")
+
+    def test_normalize_cmd_ack_branches_before_label_table(self):
+        # V2.1：/hardware/cmd_ack 指令回执（超位拒绝），透传 result/detail
+        feedback = normalize_feedback_message(
+            "/hardware/cmd_ack",
+            {"module_id": 3, "device_id": 9, "ack_msg": 1, "result": 3, "detail": 1},
+        )
+
+        self.assertEqual(feedback["data_type"], "cmd_ack")
+        self.assertEqual(feedback["feedback_type"], "指令回执")
+        self.assertEqual(feedback["result"], 3)
+        self.assertEqual(feedback["detail"], 1)
 
 
 if __name__ == "__main__":

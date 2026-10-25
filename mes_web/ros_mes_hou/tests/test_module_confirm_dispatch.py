@@ -93,7 +93,8 @@ class ModuleConfirmDispatchTest(unittest.TestCase):
                     '"msg":{"module_id":5,"device_id":0,"position":[100]}}'
                 )
 
-        dispatcher = RosbridgeClient(ROS1_PROFILE, url="ws://test", timeout=0.1)
+        dispatcher = RosbridgeClient(
+            ROS1_PROFILE, url="ws://test", timeout=0.1, module_confirm_timeout=0.1)
         payload = build_module_confirm_publish_payload(5)
 
         with patch("app.ros.rosbridge.websockets") as websockets_mock:
@@ -128,7 +129,8 @@ class ModuleConfirmDispatchTest(unittest.TestCase):
                     '"msg":{"module_id":5,"device_id":0,"position":[1]}}'
                 )
 
-        dispatcher = RosbridgeClient(ROS1_PROFILE, url="ws://test", timeout=0.1)
+        dispatcher = RosbridgeClient(
+            ROS1_PROFILE, url="ws://test", timeout=0.1, module_confirm_timeout=0.1)
         payload = build_module_confirm_publish_payload(5)
 
         with patch("app.ros.rosbridge.websockets") as websockets_mock:

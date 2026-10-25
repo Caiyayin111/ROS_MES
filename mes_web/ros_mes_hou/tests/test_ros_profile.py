@@ -38,6 +38,11 @@ class RosProfileDialectTest(unittest.TestCase):
         drawing = build_drawing_path_publish_payload("a/b.json", profile=ROS2_PROFILE)
         self.assertEqual(drawing["message_type"], "std_msgs/msg/String")
 
+    def test_fine_tuning_payload_rejects_out_of_range_axis(self):
+        # V2.1 三轴布局：轴号 1~15，16 起非法（四轴残留 17~20 一并拒绝）
+        with self.assertRaises(Exception):
+            build_fine_tuning_publish_payload("rotation", 1.0, 2, 16)
+
     def test_default_builders_keep_ros1_contract(self):
         with patch.dict(os.environ, {"ROS_VERSION": "1"}):
             module = build_module_confirm_publish_payload(5)
