@@ -11,6 +11,78 @@
 
 ---
 
+## 2026-10-25（七）
+
+- 测试页通道统一走 rosbridge（ROS1/ROS2 行为一致）+ 同机部署 Python 指南（已完成，**51 passed 全绿**，双模式端到端冒烟通过）
+  - 起因：ROS 端负责人将把前后端部署到 ROS 机器上同机自测（不走虚拟网络），而后端锁版依赖要求 Python ≥3.10，干净 venv 里没有 rospy——ROS1 模式的测试页 `send_ros` 原走 rospy 会 503
+  - 修正：`_RosbridgeStatusWatcher` 迁入共用层，`/ros/**` 测试通道在 **ROS1/ROS2 两版统一经 rosbridge**（publish_web_cmd + /robot_status 状态订阅），rospy 原生通道降级为 ROS1 历史兼容（随 start_native_node 附带启动）；两份差异表同步更新（测试通道不再是差异项）
+  - 冒烟：ROS1 模式（无 rospy 的 venv）send_ros 200 且 bridge 收到 /web_cmd、状态 ros_ready=true；ROS2 模式同通过
+  - **同机部署 Python 指南**（已写入 deploy/README_DEPLOY.md）：Ubuntu 24.04（ROS2 机器）系统 Python 3.12 直接可用；Ubuntu 20.04（ROS1 机器）系统 Python 3.8 **不可用**，用 Miniconda/deadsnakes 建独立 3.10+ 环境，勿动系统 Python（Noetic 依赖）
+  - 前端：RosTestPage 补工位号输入（station 必传契约的测试页落地），build 通过
+
+## 2026-10-25（六）
+
+- ROS2 测试页通道完成 + 前后端 ROS2 适配全面收口（已完成，**50 passed 全绿**，前端 build 通过，端到端冒烟通过）
+  - **新增**：ROS2 适配器补齐测试通道（原任务收窄项）——`/api/ros/send_ros` 在 `ROS_VERSION=2` 下经 rosbridge 发布 `/web_cmd`（std_msgs/String JSON，与 ROS1 rospy 同契约）；`/api/ros/get_ros_status` 由后台常驻线程订阅 `/robot_status` 维护（断线 5s 自动重连，`test_data=true` 标记测试数据，无数据显示 unknown）；`main.py` 增加 shutdown 钩子结束后台连接；rosbridge 不可达时发送接口返回 503（ros.py 同时捕获 RosbridgeError）
+  - **前端**：ModuleManagement 增加"工位号"选择（1~15，station 必传契约的 UI 落地），payload 随 `/module/` 下发
+  - **端到端冒烟**（本机假 rosbridge，ROS_VERSION=2）：send_ros 200 且 bridge 收到 /web_cmd advertise+publish；连接中 get_ros_status 返回 `ros_ready=true` + 推送状态；杀掉 bridge 后 7s 内 `ros_ready=false`。三种场景全部符合"ROS 测试页接 ROS2"任务验收标准
+  - **ROS2 适配就绪清单**：类型串 `pkg/msg/X`、stamp `sec/nanosec`、8 路反馈话题、模块确认握手（station）、急停/解除、测试页通道——全部走 `ROS_VERSION=2` 一键切换，前端除三轴编码外零改动
+  - 挂起项不变：MM_PER_REV（等下位机）、大屏 robot_status 数据流（web_data_node 在 ROS 端 launch 中被注释）
+
+## 2026-10-25（五）
+
+- 与 ROS 端负责人确认最后两个待决项（沟通完成，结论已写入三轴版清单）
+  - **图纸话题前缀**：ROS 端答复"按接口的来"——话题定为无前缀 `/frontend_pointcloud_topic`，ROS 端自行修正其 `rob_arm.env`；后端零改动，协议不一致②正式闭环。**联调时验证一次"图纸下发 → 三视图"链路**
+  - **MM_PER_REV=0.7**：ROS 端确认换算还没测完、真实系数等下位机提供——前端"度→mm"反馈换算**挂起**。拿到真值后的动作（勿忘）：ROS 端改 `rob_arm.env` + `deploy/config/rob_arm.env` 两处，前端用同一系数加换算（三轴版清单 §7.5 已标注状态）
+
+## 2026-10-25（四）
+
+- 确认《三轴版 V2.1 接口清单》为 ROS 对接唯一权威，按文档收尾（已完成，**46 passed 全绿**）
+  - **修正**：模块确认 station 改为 **`/module/` 请求体必传**（操作员选组 1~15，缺省 422），删除上一条目里"默认 station=module_id+1"的推导——文档 §7.2 明确由前端选择确认第几组，且 §7.6 确认 module_id 为业务模块号（与 SEG 不同空间），无 0~14 限制
+  - **闭环**：协议不一致②（图纸话题）按清单定为无前缀 `/frontend_pointcloud_topic`，后端无需改；ROS 端 rob_arm.env 的 `/control` 前缀值与清单矛盾，待 ROS 端修正
+  - **从 ROS 源码补全**（清单未给全的部分）：cmd_ack 枚举=仅超位拒绝（`ack_msg=1, result=3, detail=1上限/2下限`，无成功回执，三轴版清单 §4 已标注）；解除急停契约=发 `/control/softstop_release`（softstop_node 转发 [0x04]）
+  - **新增**：`POST /api/control/emergency_stop/release`（急停解除，登录态）；种子数据补齐 5 臂（Unit_ID 128/160，延续每臂 +32；sensor_ID 同规律），`armIndexFromUnitId` 的 3 臂限制随之解除
+  - **前端待办**：① 模块锁定页加"确认第几组"选择并把 `station` 带进 `/module/` 请求；② FineTuningPage 按 `cmd_ack`（result=3）提示超位拒绝；③ 伸缩 °→mm 换算（系数待 ROS 确认）
+  - **仍待 ROS 端**：① rob_arm.env 图纸话题前缀修正；② MM_PER_REV 真实值（0.7 为假设值）；③（低优先）ROS2 移植时间表/包名/是否继续走 rosbridge
+  - 文档结构决定：**不按 ROS1/ROS2 拆两份接口文档**（契约版本无关，双份必然漂移）；三轴版清单末尾新增"§8 ROS1/ROS2 差异速查表"（类型串/stamp 字段/原生通道/部署四项差异 + 对 ROS2 移植的契约要求），代码层差异真相在 `app/ros/profile.py`；部署文档等 ROS2 动工时再在 `deploy/` 单独成文
+
+## 2026-10-25（三）
+
+- 对齐《三轴版 V2.1 接口清单》（ROS 端三轴化，每臂 3 轴，轴号 1~15）（已完成，**45 passed 全绿**，前端 build 通过）
+  - 文档已收录进 `docs/ROS_MES_前后端ROS接口清单_三轴版_V2.1.md`（取代旧接口文档的 ROS 部分，旧文档已加横幅）；清单 §7 各项处理状态见该文档标注
+  - P0 模块确认：回执等待超时与普通超时分离，默认 35s（`ROS_MODULE_CONFIRM_ACK_WAIT_S`，对齐 ROS 端 30s 等宣告窗口，否则必然 502）
+  - P0 三轴化：后端反馈标签表 `(臂-1)*3+关节`（臂1=1/2/3 … 臂5=13/14/15）、微调校验 1~15；前端 `deviceEncoding.ts` 同步（`AXES_PER_ARM=3`、偏移 `{1,2,3}`、臂级 21~25 不变）
+  - P1 `/hardware/cmd_ack` 加入反馈流（`data_type=cmd_ack`，透传 `ack_msg/result/detail`）——超位拒绝不再静默丢失
+  - **待办交接**：① 前端 ModuleManagement 需让操作员选"确认第几组"并传 `station`（7.2，后端已支持）；② 伸缩反馈 °→mm 换算（7.5，MM_PER_REV=0.7 是假设值，待 ROS 确认）；③ 种子数据仅 3 臂，`armIndexFromUnitId` 无法识别臂 4/5（7.3，需补种子或改映射）；④ 反馈 `module_id` 是 SEG 不是业务模块号（7.6，按 module_id 关联的逻辑会错）
+  - **`???` 与 ROS 端核对**：图纸路径话题——三轴版清单写 `/frontend_pointcloud_topic`（无前缀），但已推送的 `rob_arm.env` 仍是 `/control/frontend_pointcloud_topic`，文档与源码矛盾，以哪边为准需 ROS 端确认（此前记录的协议不一致②仍未闭环）
+
+## 2026-10-25（二）
+
+- 整合远端 main（ROS 端 V2.1 更新）并适配新协议（已完成，**全套 40 passed 全绿**）
+  - 远端新增：ROS 端会话式模块确认（`module_confirme_node.py` V2.1 + `UidAnnounce/SegAssign/SegConfirm.msg`）、`pressure_avg`/`vacuum_loss` 两路反馈话题、`can_event_log` 表（`sqlite_create.py`，合并时经重命名追踪自动落到 `mes_web/ros_mes_hou/`）
+  - 旧路径 `rosbridge_gateway.py` 的远端改动（两路新话题）已移植进 `app/ros/`（profile 话题表 + normalizer 分支 + 反馈流订阅列表）
+  - **模块确认契约变更（前端需配合）**：ROS 端 V2.1 要求 `position=[100, station]`，station=工位号 1~15，模块号=SEG=工位-1；后端默认 `station = module_id + 1`（module_id 须在 0~14），前端可在 `/module/` 请求体显式传 `station` 覆盖；`module_id=18` 这类越界值现在构造期就报 422。**前端 ModuleManagement 若下发 x*16+y 的大模块号会被拒，需和 ROS 端对齐模块号→工位映射**（`???` 待确认：前端 x*16+y 编码与 SEG 0~14 的对应关系）
+  - 好消息：改动记录 2026-10-25（一）里的协议不一致①（失败码 -1 vs 1）**ROS 端已在 V2.1 修复**（`RESULT_FAILED = 1`）；不一致②（图纸话题 `/control` 前缀）仍未解决
+- PR 评审与合并（已完成，合并后全套 43 passed 全绿）
+  - **PR #4**（fulan0721：急停地址配置化 + 测试去盘符依赖）→ **已合并**（本地 merge 解决冲突后推送，GitHub 自动标记 merged，队友署名保留）：急停地址修复已被适配层等价实现（保持旧文件删除）；3 个急停新用例移植到 `RosbridgeClient`；`tools/verify_emergency_stop_config.py` 移入 `mes_web/ros_mes_hou/tools/` 并改用适配层接口；`test_coordination_payload` 去盘符改动自动应用、路径按新布局修正为向上 3 级
+  - **PR #6**（czyhelp：ROS2 消息通道原型）→ **暂不合并**，已留评审意见：文件放错位置（根目录 vs `robot_control_backend/scripts/` 与 `mes_web/ros_mes_front/`）、个人 ZeroTier IP 硬编码、需基于最新 main（mes_web 重构 + V2.1 握手协议）重做；已向其说明 ROS2 接入后端侧已就绪（`ROS_VERSION=2` 切换即可）
+  - 合并远端 main 时发现 ROS 端 V2.1 更新（见上一条），PR 评审基于新结构完成
+
+## 2026-10-25（一）
+
+- 仓库结构调整：前后端归入 `mes_web/`（已完成，全套 27 passed 全绿）
+  - `ros_mes_front/`、`ros_mes_hou/` 整目录移入 `mes_web/`，与 `robot_control_backend/`（队友侧，未动）平级；`sqlite_create.py` 移入 `mes_web/ros_mes_hou/`；`ros_database.db` 仍在仓库根（本地文件，git 忽略）
+  - 路径逻辑收敛到 `mes_web/ros_mes_hou/app/core/config.py`：新增 `BACKEND_ROOT` / `PROJECT_ROOT`（向上自动查找含 `robot_control_backend` 或 `.git` 的目录，可用环境变量 `PROJECT_ROOT` 覆盖）/ `ROS_SCRIPTS_DIR`（可用环境变量覆盖）；`ros_control.py`、`coordination.py`、`sqlite_create.py` 原先各自向上数层级拼路径的代码统一改为读配置
+  - README / deploy 三份文件 / 接口字段文档 / 命名规范中的路径同步更新；`.gitignore` 增加 `.zcode/`
+  - `???` 提醒：队友 pull 后需重新 `cd mes_web\ros_mes_hou` 激活 venv；deploy_windows.ps1 的路径约定是"仓库文件夹的上一级 + 显式 `ROS_MES\` 前缀"，未改变
+- ROS1/ROS2 适配层拆分（已完成，**全套 35 passed 全绿**，原 27 + 新增 8）
+  - 新建 `mes_web/ros_mes_hou/app/ros/`：`profile.py`（ROS1/ROS2 协议差异表：消息类型串 `pkg/X` vs `pkg/msg/X`、stamp 字段 `secs/nsecs` vs `sec/nanosec`、话题表支持 `ROS_TOPIC_<键名>` 环境变量覆盖）、`rosbridge.py`（共用传输层，原 `rosbridge_gateway.py` 泛化 + 急停收编，顺带消灭 `ros_control.py` 硬编码的 `ws://localhost:9010`）、`base.py`（适配器接口 + 子进程工具）、`normalizer.py`（原反馈归一化）、`ros1/`（rospy 原生通道由 `ros_service.py` 迁入）、`ros2/`（预设实现，ROS 端定稿后微调 profile 即可）
+  - 工厂 `get_ros_dispatcher()` 读环境变量 `ROS_VERSION`（1/ros1/2/ros2，默认 1）返回适配器单例；端点默认参数改为 `dispatcher=None` 惰性解析，测试注入 DummyDispatcher 的方式不变；对外 API 路径/请求/响应零变化
+  - 删除：`app/services/ros_dispatcher.py`（死代码）、`app/services/` 目录整体移除；`WEBSOCKET_URI` 死常量
+  - 配置收口：`ROSBRIDGE_URL` 进入 `core/config.py`；`deploy/config/backend.env` 新增 `ROS_VERSION=1`
+  - 文档：《接口字段文档》新增"第 12 节 ROS1/ROS2 适配说明"（差异表 + 附录文件索引更新）；README 增适配层说明
+  - **记录未修的协议不一致（用户决定本次不修，待与 ROS 端确认）**：① 模块确认失败码——ROS 端 `module_confirme_node` 实际发布 `-1`（`RESULT_FAILED = -1`），后端沿用文档值只识别 `1`，真失败时会等超时而非立即报错；② 图纸路径话题——后端发 `/frontend_pointcloud_topic`，ROS 端 `rob_arm.env` 里 `ROS_TOPIC_FRONTEND_POINTCLOUD=/control/frontend_pointcloud_topic`（`data_process_node` 实际订阅值），文档写的也是无前缀版；两处不一致，需 ROS 端确认现网实际生效的话题后统一
+
 ## 2026-10-05（七）
 
 - 文档目录整理（已完成）

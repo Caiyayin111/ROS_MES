@@ -21,3 +21,5 @@ dist/
 # 工具产物（Mimosa 安全扫描 / ZCode）
 .mimosa/
 .zcodeignore
+# ZCode 会话产物
+.zcode/

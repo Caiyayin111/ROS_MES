@@ -1,8 +1,10 @@
 # ROS_MES 前后端接口字段文档
 
+> ⚠ **部分失效（2026-10-25）**：ROS 端已完成三轴化（每臂 3 轴，轴号 1~15），本文档的 **ROS 话题 / 消息格式 / device_id 编码**部分已被《[ROS_MES_前后端ROS接口清单_三轴版_V2.1](ROS_MES_前后端ROS接口清单_三轴版_V2.1.md)》取代，对接请以三轴版为准；本文档的 **REST 业务接口、WebSocket 推送格式、数据库表字段与认证矩阵**部分仍有效。
+
 > **基准**：以《ROS_MES_前后端ROS接口清单》（2026-10-05，团队基准文档）的章节结构与内容为准；本文档在其基础上逐项对照 v1.1 代码（commit `b03b57a`）核对修正，并在末尾补充基准未覆盖的**业务管理接口、数据库表字段与认证矩阵**。
 >
-> - 范围：`ros_mes_hou/`（FastAPI 后端）+ `ros_mes_front/`（Vue3 前端）；`robot_control_backend/` 的 msg 定义由队友维护，此处仅作对接参照
+> - 范围：`mes_web/ros_mes_hou/`（FastAPI 后端）+ `mes_web/ros_mes_front/`（Vue3 前端）；`robot_control_backend/` 的 msg 定义由队友维护，此处仅作对接参照
 > - 与基准的三处核对修正见 [8.9 与基准文档的差异核对](#89-与基准文档的差异核对)
 > - 字段名均与代码一致
 
@@ -119,9 +121,10 @@
 }
 ```
 
-- ROS 消息（IntCmd）：`module_id`（前端计算 `x*16+y`）、`device_id=0`（模块级指令）、`position=[100]`（确认标识）
-- 确认机制：发布后订阅 `/hardware/module_confirm_success` 与 `/hardware/web_module_cmd`；回包 `position[0]==100` 成功、`position[0]==1` 失败（HTTP 502）
-- x/y 缺失 → 422
+- ROS 消息（IntCmd）：`module_id`（业务模块号，无范围限制，ROS 端原样回执）、`device_id=0`（模块级指令）、`position=[100, station]`（V2.1 会话式握手：100=触发，station=工位号 1~15）
+  - V2.1 契约（三轴版清单 §6/§7.2）：station=工位号 1~15，由操作员选择确认第几组，**前端必须显式传 `station` 字段**，后端不做默认推导
+- 确认机制：发布后订阅 `/hardware/module_confirm_success` 与 `/hardware/web_module_cmd`；回包 `module_id` 原样返回、`position[0]==100` 成功、`position[0]==1` 失败（HTTP 502）
+- x/y 缺失 → 422；缺 station → 422；station 越界 → 422
 
 ---
 
@@ -337,6 +340,8 @@
 | 摆动轴反馈 | `/hardware/swing_feedback` | SwingCmd | WebSocket 反馈流 | FineTuningPage |
 | 伸缩轴反馈 | `/hardware/telescope_feedback` | TelescopicCmd | WebSocket 反馈流 | FineTuningPage |
 | 压力传感器 | `/hardware/sensor_feedback` | SensorCmd | WebSocket 反馈流 | FineTuningPage |
+| 压力平均值 | `/hardware/pressure_avg` | SensorCmd | WebSocket 反馈流 | FineTuningPage（V2 新增，5s 窗口均值，`data_type=pressure_average`） |
+| 吸盘失压告警 | `/hardware/vacuum_loss` | VacuumLoss | WebSocket 反馈流 | FineTuningPage（V2 新增，`data_type=vacuum_loss_event`） |
 | 陀螺仪姿态 | `/hardware/imu_angles` | TuoLuoYi（GyroFeedback 衍生） | WebSocket 反馈流 | FineTuningPage |
 | 模块确认成功 | `/hardware/module_confirm_success` | IntCmd | REST 同步等待 | ModuleManagement |
 | 模块确认失败 | `/hardware/web_module_cmd` | IntCmd | REST 同步等待 | ModuleManagement |
@@ -373,7 +378,7 @@ uint16 device_id          # 寻址单元 AXIS：
 int32[] position          # 位置/数据数组
 ```
 
-使用场景：模块确认（`/control/module_cmd`，`position=[100]`）、急停（`/control/softstop`，`module_id=0, device_id=0, position=[0x01]`）、压力触发（`/control/sensor_cmd`）、指令汇聚（`/arm/cmd_vel`）。
+使用场景：模块确认（`/control/module_cmd`，V2.1 起 `position=[100, station]`，见第 2 节）、急停（`/control/softstop`，`module_id=0, device_id=0, position=[0x01]`）、压力触发（`/control/sensor_cmd`）、指令汇聚（`/arm/cmd_vel`）。
 
 ### 5.2 RotationCmd.msg —— 旋转轴指令/反馈
 
@@ -722,6 +727,27 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 
 ---
 
+## 12. ROS1/ROS2 适配说明（后端适配层）
+
+后端内置 ROS 适配层 `mes_web/ros_mes_hou/app/ros/`，业务接口不感知 ROS 版本；环境变量 `ROS_VERSION`（`1`/`ros1`/`2`/`ros2`，默认 `1`）选择适配器，定义于 `app/ros/profile.py`。
+
+前后端与 ROS 端全部通过 rosbridge JSON 协议（`advertise`/`publish`/`subscribe`）通信，该协议两代 ROS 一致，版本差异只有下表几项：
+
+| 差异项 | ROS1（现网） | ROS2（预设，待 ROS 端定稿核对） |
+|---|---|---|
+| 自定义消息类型串 | `robot_control_backend/RotationCmd` | `robot_control_backend/msg/RotationCmd` |
+| std_msgs 类型串 | `std_msgs/String` | `std_msgs/msg/String` |
+| `header.stamp` 字段名 | `secs` / `nsecs` | `sec` / `nanosec` |
+| 测试通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | **两版一致**：2026-10-25 起统一经 rosbridge，rospy 直连保留为 ROS1 历史兼容 | 同左 |
+| 话题名 | 见第 4 节 | 同 ROS1；ROS 端若改名，用环境变量 `ROS_TOPIC_<键名>` 覆盖或改 `profile.py` 默认值 |
+
+- ROS1 / ROS2 的适配器分别为 `app/ros/ros1/Ros1Dispatcher`、`app/ros/ros2/Ros2Dispatcher`，共用 `app/ros/rosbridge.py` 传输层；本文档第 4、5 节记录的话题与消息格式即 ROS1 现网契约，ROS2 端移植定稿后由 ROS 端同步确认差异表。
+- 急停 `/control/softstop` 沿用现网 typeless publish（不带 advertise/type）；若 ROS2 端收不到，再补 `advertise`。
+- ~~已知协议不一致①：模块确认失败码~~ **已解决**——ROS 端 V2.1（`module_confirme_node.py`）已把 `RESULT_FAILED` 对齐为 `1`，与后端/文档一致；同时握手升级为会话式 `position=[100, station]`（见第 2 节）。
+- ~~已知协议不一致②：图纸路径话题~~ **已闭环（2026-10-25，以三轴版清单为准）**——后端发布的 `/frontend_pointcloud_topic`（无前缀）即为准；ROS 端已推送的 `rob_arm.env` 中 `ROS_TOPIC_FRONTEND_POINTCLOUD=/control/frontend_pointcloud_topic` 与清单矛盾，由 ROS 端修正其 env，后端不预留改动（必要时可用 `ROS_TOPIC_DRAWING_PATH` 环境变量覆盖）。
+
+---
+
 ## 附录：关键文件索引
 
 ### 后端 (ros_mes_hou)
@@ -738,10 +764,11 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 | `app/api/endpoints/ws_stream.py` | 大屏 WebSocket 流 |
 | `app/api/endpoints/user.py` / `task.py` / `workflow.py` / `drawing.py` | 业务管理接口 |
 | `app/api/deps.py` | `get_current_user` / `get_current_admin` 鉴权依赖 |
-| `app/services/rosbridge_gateway.py` | **核心：rosbridge 网关，消息构造与下发** |
-| `app/services/ros_control.py` | 硬件控制（急停、串口测试、硬件状态） |
-| `app/services/ros_service.py` | 旧版 rospy 直接发布 |
-| `app/services/ros_dispatcher.py` | ROS 分发适配层（mock/command 模式） |
+| `app/ros/profile.py` | **核心：ROS1/ROS2 协议差异定义（类型串、stamp 字段、话题表），见第 12 节** |
+| `app/ros/rosbridge.py` | **核心：rosbridge 网关（传输层），消息构造与下发** |
+| `app/ros/base.py` | ROS 适配器统一接口 + 子进程工具（硬件状态/串口测试/大屏数据流） |
+| `app/ros/normalizer.py` | 反馈消息归一化（device_id → 前端标签） |
+| `app/ros/ros1/` / `app/ros/ros2/` | ROS1 适配器（含 rospy 原生通道）/ ROS2 适配器 |
 | `app/schemas/finetuning.py` / `hardware.py` | 微调 / 硬件反馈 Pydantic 模型 |
 | `app/db/models.py` | 17 张表 SQLAlchemy 模型 |
 | `app/core/config.py` / `security.py` | 配置项 / JWT 与密码 |
