@@ -6,6 +6,7 @@ import json
 import struct
 import threading
 import sqlite3
+from collections import deque
 from datetime import datetime
 
 import rospy
@@ -26,6 +27,9 @@ from robot_control_backend.msg import (
     AxisFault,
     LimitEvent,
     VacuumLoss,
+    UidAnnounce,
+    SegAssign,
+    SegConfirm,
 )
 
 
@@ -56,6 +60,18 @@ class CANBusBridge:
     SUB_MODULE_STOP = 0x08
     SUB_AXIS_STOP = 0x0C
 
+    # ===== 会话式模块确认（领号段，独立协议，不走 V2 位域分派）=====
+    UID_FRAME_BASE = 0x15BC0000        # 领号段基址（掩码匹配 0x15BC00xx）
+    UID_FRAME_MASK = 0x1FFFFF00
+    UID_ASSIGN_ID = 0x15BC0010         # 分配应答（下行）
+    UID_CONFIRM_ID = 0x15BC0050        # 分配确认（上行）
+    UID_ANNOUNCE_BASE = 0x15BC0080     # 未编号宣告基址（上行，16 槽步长 4）
+    UID_ANNOUNCE_MAX = 0x15BC00BC
+
+    # 事件类型编码（写入 can_event_log.event_type）
+    EVT_ARRIVE, EVT_STOP, EVT_AXIS_FAULT, EVT_HOME, EVT_LIMIT = 1, 2, 3, 4, 5
+    EVT_CMD_ACK, EVT_VACUUM_LOSS, EVT_WDG_WARN, EVT_NODE_FAULT, EVT_BOOT = 6, 7, 8, 9, 10
+
     def __init__(self):
         load_env_config()
         rospy.init_node("can_bridge")
@@ -66,7 +82,7 @@ class CANBusBridge:
         self.node_count = int(os.environ['CAN_NODE_COUNT'])
         self.axis_count = int(os.environ['CAN_AXIS_COUNT'])
         self.seg = int(os.environ['CAN_MODULE_COUNT']) - 1  # SEG 从 0 开始
-        # V2：ROS 层 device_id 即 AXIS（1~25），下行帧 CAN NODE 段恒填主控节点号
+        # V2：ROS 层 device_id 即 AXIS（1~15 轴 / 21~25 臂级），下行帧 CAN NODE 段恒填主控节点号
         self.master_node = int(os.environ['CAN_MASTER_NODE_ID'])
         self.default_speed = int(os.environ['CAN_DEFAULT_SPEED_LIMIT'])
         self.heartbeat_timeout = float(os.environ['CAN_HEARTBEAT_TIMEOUT'])
@@ -74,12 +90,24 @@ class CANBusBridge:
         self.acc_scale = float(os.environ['IMU_ACC_SCALE'])
         # V2：上行 ROS 消息的 module_id 不做静态配置，一律取 CAN 帧 ID 的 SEG 位域（帧自带模块号）
         self.sensor_arm_base = int(os.environ['CAN_SENSOR_ARM_BASE'])
+        # V2：单帧相对增量上限（0.01°）与分帧下发周期（秒）
+        self.max_delta_centideg = int(os.environ['CAN_MAX_DELTA_CENTIDEG'])
+        self.chunk_period = float(os.environ['CAN_CHUNK_PERIOD'])
+        # 发出一帧增量后等待该轴位置反馈的超时（秒），超时视为反馈丢失继续下发
+        self.tx_wait_timeout = float(os.environ['CAN_TX_WAIT_TIMEOUT'])
+        # 固件当前不支持回零（下发即返回 Result=3），默认不下发 CAN 帧
+        self.home_supported = os.environ['CAN_HOME_SUPPORTED'].lower() == 'true'
 
         # ---------- 运行状态 ----------
         self.bus = None
         self.running = True
         self.bus_lock = threading.Lock()
         self.last_sent = None
+        # 轴号 -> deque[delta_centideg]，相对增量分帧 FIFO（每周期取一帧）
+        self.tx_queues = {}
+        self.tx_lock = threading.Lock()
+        # 轴号 -> 最近一帧发出时间戳；已发出一帧、正在等待该轴位置反馈的标记
+        self.tx_waiting = {}
         # node -> {time, state, run_mask, base_mask}
         self.node_heartbeats = {}
         self.node_lost = set()
@@ -116,13 +144,23 @@ class CANBusBridge:
             os.environ['ROS_TOPIC_LIMIT_EVENT'], LimitEvent, queue_size=30)
         self.pub_vacuum_loss = rospy.Publisher(
             os.environ['ROS_TOPIC_VACUUM_LOSS'], VacuumLoss, queue_size=30)
+        # 会话式模块确认（领号段桥接）
+        self.pub_uid_announce = rospy.Publisher(
+            os.environ['ROS_TOPIC_UID_ANNOUNCE'], UidAnnounce, queue_size=30)
+        self.pub_seg_confirm = rospy.Publisher(
+            os.environ['ROS_TOPIC_SEG_CONFIRM'], SegConfirm, queue_size=30)
 
         # ---------- 订阅 ----------
         rospy.Subscriber(os.environ['ROS_TOPIC_ARM_CMD_VEL'], IntCmd, self.on_cmd_received)
         rospy.Subscriber(os.environ['ROS_TOPIC_HOME_CMD'], IntCmd, self.on_home_cmd)
+        rospy.Subscriber(os.environ['ROS_TOPIC_SEG_ASSIGN'], SegAssign, self.on_seg_assign)
 
         # ---------- 心跳看门狗 ----------
-        rospy.Timer(rospy.Duration(0.1), self._heartbeat_watchdog)
+        # 下位机暂未做心跳机制，看门狗定时器先注释掉（恢复时取消注释即可）
+        # rospy.Timer(rospy.Duration(0.1), self._heartbeat_watchdog)
+
+        # ---------- 相对增量分帧下发 ----------
+        rospy.Timer(rospy.Duration(self.chunk_period), self._flush_tx_queues)
 
         # ---------- 数据库归档 ----------
         self._init_archive_db()
@@ -170,11 +208,15 @@ class CANBusBridge:
             f(self._build_id(self.PRI_MOTION, self.GRP_MOTION_FB, node=self.master_node), cls_mask),
             f(self._build_id(self.PRI_EVENT, self.GRP_EVENT, node=self.master_node), cls_mask),
             f(self._build_id(self.PRI_SENSOR, self.GRP_SENSOR, node=self.master_node), cls_mask),
+            # 会话式模块确认：领号段 0x15BC00xx（未编号宣告 0x80~0xBC + 分配确认 0x50）
+            f(self.UID_FRAME_BASE, self.UID_FRAME_MASK | rtr_mask),
         ]
 
     def _connect_bus(self):
+        # 与台架测试一致：500kbps、仅扩展数据帧（过滤器已排除 RTR/远程帧）
+        # 注意 SocketCAN 的真实波特率由系统层 ip link set can0 type can bitrate 500000 设置
         return can.interface.Bus(
-            channel=self.channel, bustype="socketcan", bitrate=self.bitrate,
+            channel=self.channel, interface="socketcan", bitrate=self.bitrate,
             can_filters=self._make_filters())
 
     def _read_can_loop(self):
@@ -227,6 +269,7 @@ class CANBusBridge:
         if device_id == 0:
             sub = value & 0xFF
             if sub == self.SUB_EMERGENCY_STOP:
+                self._clear_all_queues()
                 self._send_can_frame(0x00000000, bytes([0x01]))
                 rospy.logwarn("🚨 已发送 CAN 广播急停 0x00000000")
             elif sub == self.SUB_RELEASE_STOP:
@@ -241,22 +284,27 @@ class CANBusBridge:
                 rospy.logwarn("⚠️ 未知系统子命令 0x%02X", sub)
             return
 
-        # V2：ROS 层 device_id 即 AXIS 寻址单元（1~20轴/21~25臂级），CAN NODE 段恒为主控节点
+        # V2：ROS 层 device_id 即 AXIS 寻址单元（1~15 轴 / 21~25 臂级），CAN NODE 段恒为主控节点
         axis = device_id
         node = self.master_node
-        if not (1 <= axis <= 25):
-            rospy.logwarn("⚠️ device_id=%d 非法（允许 1~20 轴 / 21~25 臂级）", device_id)
-            return
 
-        # ---- 单轴急停：position=[0x0C] ----
-        if value == self.SUB_AXIS_STOP and 1 <= axis <= 20:
-            can_id = self._build_id(self.PRI_SAFETY, self.GRP_SYSTEM, node, axis, self.DIR_DOWN, 3)
-            self._send_can_frame(can_id, bytes([0x01]))
-            rospy.logwarn("🚨 轴%d 单轴急停 0x%08X", axis, can_id)
+        # ---- 单轴停止：position=[0x0C, 1] ----
+        # 仅当第二个元素为 1 时才判定为停止，避免与普通相对增量（0x0C=12）冲突
+        if len(msg.position) >= 2 and (int(msg.position[0]) & 0xFF) == self.SUB_AXIS_STOP \
+                and int(msg.position[1]) == 1:
+            if not (1 <= axis <= self.axis_count):
+                rospy.logwarn("⚠️ 单轴停止 device_id=%d 非法（允许轴号 1~%d）", device_id, self.axis_count)
+                return
+            # 先丢弃该轴尚未发完的增量分帧，再发停止帧
+            self._clear_axis_queue(axis)
+            can_id = self._build_id(self.PRI_MOTION, self.GRP_MOTION_CMD,
+                                    node, axis, self.DIR_DOWN, 3)
+            self._send_can_frame(can_id, bytes([0x00]))
+            rospy.logwarn("🚨 轴%d 单轴停止 0x%08X", axis, can_id)
             return
 
         # ---- 臂级传感器启停：axis 21~25，position=[cmd_type, cmd_value, rate_idx] ----
-        if 21 <= axis <= 25:
+        if self.sensor_arm_base <= axis <= self.sensor_arm_base + 4:
             if len(msg.position) < 3:
                 rospy.logwarn("⚠️ 臂级传感器指令需要 position=[cmd_type, cmd_value, rate_idx]")
                 return
@@ -275,24 +323,102 @@ class CANBusBridge:
                           axis, cmd_type, cmd_value, rate_idx, can_id)
             return
 
-        # ---- 单轴绝对角度命令：position=[target_angle_001deg] ----
-        if 1 <= axis <= 20:
+        # ---- 单轴相对增量命令：position=[delta_centideg]（0.01°，有符号补码）----
+        if 1 <= axis <= self.axis_count:
             # 去重签名含 header.stamp：仅抑制同一条指令的回声/重复投递（stamp 相同）。
-            # 相对增量控制下，即使累加后的绝对目标与上次相同，新指令（新 stamp）也允许重新下发；
             # stamp 缺失（=0）时不做去重。
             stamp_nsec = msg.header.stamp.to_nsec() if msg.header and msg.header.stamp.to_nsec() > 0 else None
             sig = (device_id, value, stamp_nsec)
             if stamp_nsec is not None and sig == self.last_sent:
-                rospy.loginfo("↪️ 轴%d 重复指令（stamp 相同，目标 %d/0.01°）已抑制", axis, value)
+                rospy.loginfo("↪️ 轴%d 重复指令（stamp 相同，增量 %d/0.01°）已抑制", axis, value)
                 return
-            can_id = self._build_id(self.PRI_MOTION, self.GRP_MOTION_CMD, node, axis, self.DIR_DOWN, 0)
-            payload = struct.pack('>iH', int(value), self.default_speed)
-            if self._send_can_frame(can_id, payload):
-                self.last_sent = sig
-                rospy.loginfo("📤 轴%d 绝对角度 %d(0.01°) → 0x%08X", axis, value, can_id)
+            frames = self._enqueue_axis_delta(axis, value)
+            self.last_sent = sig
+            rospy.loginfo("📤 轴%d 相对增量 %+d(0.01°) → 排入 %d 帧", axis, value, frames)
             return
 
-        rospy.logwarn("⚠️ 无法识别 axis=%d（device_id=%d）", axis, device_id)
+        rospy.logwarn("⚠️ device_id=%d 非法（允许 1~%d 轴 / %d~%d 臂级）",
+                      device_id, self.axis_count, self.sensor_arm_base, self.sensor_arm_base + 4)
+
+    # ======================================================================
+    # 相对增量分帧队列
+    # ======================================================================
+    def _split_delta(self, delta_centideg):
+        """把一次相对增量按单帧上限 CAN_MAX_DELTA_CENTIDEG 切分为同号帧序列"""
+        step = self.max_delta_centideg
+        chunks = []
+        while abs(delta_centideg) > step:
+            chunks.append(step if delta_centideg > 0 else -step)
+            delta_centideg -= step if delta_centideg > 0 else -step
+        if delta_centideg != 0:
+            chunks.append(delta_centideg)
+        return chunks
+
+    def _enqueue_axis_delta(self, axis, delta_centideg):
+        """将一次相对增量切帧后追加到该轴 FIFO 队尾，返回本次入队帧数"""
+        chunks = self._split_delta(int(delta_centideg))
+        if not chunks:
+            return 0
+        with self.tx_lock:
+            self.tx_queues.setdefault(axis, deque()).extend(chunks)
+            rospy.loginfo("📥 轴%d 增量 %+d 拆为 %d 帧，队列剩余 %d 帧",
+                          axis, delta_centideg, len(chunks), len(self.tx_queues[axis]))
+        return len(chunks)
+
+    def _clear_axis_queue(self, axis):
+        """清空指定轴待发的增量分帧及等待反馈标记"""
+        with self.tx_lock:
+            q = self.tx_queues.pop(axis, None)
+            self.tx_waiting.pop(axis, None)
+        if q:
+            rospy.logwarn("🗑️ 轴%d 待发增量分帧已清空（%d 帧）", axis, len(q))
+
+    def _clear_all_queues(self):
+        """清空全部轴待发的增量分帧及等待反馈标记（急停时调用）"""
+        with self.tx_lock:
+            total = sum(len(q) for q in self.tx_queues.values())
+            self.tx_queues.clear()
+            self.tx_waiting.clear()
+        if total:
+            rospy.logwarn("🗑️ 已清空全部待发增量分帧（%d 帧）", total)
+
+    def _try_send_next(self, axis):
+        """若该轴未在等待反馈且队列非空，取队首一帧增量下发（MSG=1），并标记等待反馈"""
+        with self.tx_lock:
+            if axis in self.tx_waiting:
+                return False
+            q = self.tx_queues.get(axis)
+            if not q:
+                return False
+            delta = q.popleft()
+            if not q:
+                del self.tx_queues[axis]
+            self.tx_waiting[axis] = rospy.Time.now().to_sec()
+        can_id = self._build_id(self.PRI_MOTION, self.GRP_MOTION_CMD,
+                                self.master_node, axis, self.DIR_DOWN, 1)
+        payload = struct.pack('>hH', int(delta), self.default_speed)
+        if self._send_can_frame(can_id, payload):
+            rospy.loginfo("📤 轴%d 相对增量 %+d(0.01°) → 0x%08X", axis, delta, can_id)
+            return True
+        # 发送失败：帧放回队首并清除等待标记，下轮重试
+        with self.tx_lock:
+            self.tx_waiting.pop(axis, None)
+            self.tx_queues.setdefault(axis, deque()).appendleft(delta)
+        return False
+
+    def _flush_tx_queues(self, event):
+        """兜底扫描：清理等待反馈超时的轴，并为可发送的轴补发下一帧。
+        正常节奏由位置反馈驱动：收到该轴编码器反馈后才发下一帧（见 _dispatch_axis_feedback）"""
+        now = rospy.Time.now().to_sec()
+        with self.tx_lock:
+            for axis, ts in list(self.tx_waiting.items()):
+                if now - ts > self.tx_wait_timeout:
+                    del self.tx_waiting[axis]
+                    rospy.logwarn("⏰ 轴%d 等待位置反馈超时 %.1fs，视为反馈丢失，继续下发", axis, now - ts)
+        with self.tx_lock:
+            axes = list(self.tx_queues.keys())
+        for axis in axes:
+            self._try_send_next(axis)
 
     def on_home_cmd(self, msg):
         """/control/home_cmd：回零命令，position=[home_mode]（0x01=回零, 0x02=清除基准）"""
@@ -300,8 +426,15 @@ class CANBusBridge:
         if not msg.position:
             return
         axis = device_id
-        if not (1 <= axis <= 20):
-            rospy.logwarn("⚠️ 回零指令 device_id=%d 非法（允许轴号 1~20）", device_id)
+        if not (1 <= axis <= self.axis_count):
+            rospy.logwarn("⚠️ 回零指令 device_id=%d 非法（允许轴号 1~%d）", device_id, self.axis_count)
+            return
+        if not self.home_supported:
+            # 台架实测：下发回零帧固件固定返回 Result=3（参数越界），故不下发 CAN 帧，仅回执失败
+            rospy.logerr("🏠 轴%d 回零不受固件支持（Result=3 参数越界），已拒绝且未下发 CAN 帧", axis)
+            self.pub_cmd_ack.publish(CmdAck(
+                header=self._header(), module_id=msg.module_id, device_id=axis,
+                ack_msg=4, result=3, detail=0))
             return
         home_mode = int(msg.position[0]) & 0xFF
         can_id = self._build_id(self.PRI_MOTION, self.GRP_MOTION_CMD,
@@ -315,11 +448,48 @@ class CANBusBridge:
     def _header(self):
         return Header(stamp=rospy.Time.now())
 
+    # ======================================================================
+    # 会话式模块确认：领号段 CAN 帧桥接（唯一 CAN 出入口）
+    # ======================================================================
+    def _handle_uid_frame(self, can_id, data):
+        """解析领号段上行帧：未编号宣告 / 分配确认，转发给模块确认节点"""
+        if can_id == self.UID_CONFIRM_ID and len(data) >= 8:
+            # 分配确认：data[0..6]=Uid56，data[7]=(SEG<<4)|Result
+            uid56 = int.from_bytes(data[0:7], 'big')
+            seg, result = data[7] >> 4, data[7] & 0xF
+            self.pub_seg_confirm.publish(SegConfirm(
+                header=self._header(), uid56=uid56, seg=seg, result=result))
+            rospy.loginfo("🤝 分配确认：UID56=%X SEG=%d Result=%d", uid56, seg, result)
+            return
+        if self.UID_ANNOUNCE_BASE <= can_id <= self.UID_ANNOUNCE_MAX \
+                and (can_id - self.UID_ANNOUNCE_BASE) % 4 == 0 and len(data) >= 8:
+            # 未编号宣告：data[0]=DeviceType，data[1..7]=UID 低 56 位（大端）
+            slot = (can_id - self.UID_ANNOUNCE_BASE) // 4
+            uid56 = int.from_bytes(data[1:8], 'big')
+            self.pub_uid_announce.publish(UidAnnounce(
+                header=self._header(), device_type=data[0], uid56=uid56, slot=slot))
+            rospy.loginfo("📢 未编号宣告：槽%d 类型=0x%02X UID56=%X", slot, data[0], uid56)
+
+    def on_seg_assign(self, msg):
+        """模块确认节点的分配请求 → 发分配帧 0x15BC0010（UID56 大端 7 字节 + (SEG<<4|Seq)）"""
+        seg, seq = int(msg.seg), int(msg.seq)
+        if not (0 <= seg <= 14):
+            rospy.logwarn("⚠️ 分配 SEG=%d 非法（0~14，15 仅用于领号），已丢弃", seg)
+            return
+        uid56 = int(msg.target_uid56) & 0x00FFFFFFFFFFFFFF
+        data = uid56.to_bytes(7, 'big') + bytes([((seg & 0xF) << 4) | (seq & 0xF)])
+        if self._send_can_frame(self.UID_ASSIGN_ID, data):
+            rospy.loginfo("📤 分配应答 → UID56=%X SEG=%d Seq=%d", uid56, seg, seq)
+
     def _parse_can_frame(self, msg):
+        # 领号段（0x15BC00xx）：会话式模块确认协议，独立处理，不走 V2 位域分派
+        if (msg.arbitration_id & self.UID_FRAME_MASK) == self.UID_FRAME_BASE:
+            self._handle_uid_frame(msg.arbitration_id, bytes(msg.data))
+            return
         f = self._parse_id(msg.arbitration_id)
         grp, seg, node, axis, direction, mnum, data = (
             f["grp"], f["seg"], f["node"], f["axis"], f["dir"], f["msg"], bytes(msg.data))
-        # 轴级(1~20)/臂级(21~25)帧 device_id 即 AXIS；节点级帧(axis=0，心跳等) 用 node 号
+        # 轴级(1~15)/臂级(21~25)帧 device_id 即 AXIS；节点级帧(axis=0，心跳等) 用 node 号
         device_id = axis if axis != 0 else node
         # module_id 直接取 CAN 帧 SEG 位域（模块号由帧自带，不做静态配置）
         module_id = seg
@@ -328,23 +498,34 @@ class CANBusBridge:
         if grp == self.GRP_SYSTEM:
             if direction == self.DIR_PERIODIC:
                 if mnum == 0:                                    # 心跳 DLC=8
-                    state = data[0]
-                    run_mask = struct.unpack_from('>I', b'\x00' + data[1:4])[0] if len(data) >= 4 else 0
-                    base_mask = struct.unpack_from('>I', b'\x00' + data[4:7])[0] if len(data) >= 7 else 0
-                    self.node_heartbeats[node] = {"time": rospy.Time.now().to_sec(),
-                                                  "state": state, "run": run_mask, "base": base_mask}
-                    self.node_lost.discard(node)
-                    self.pub_heartbeat.publish(Heartbeat(
-                        header=self._header(), module_id=module_id, node_id=node,
-                        state=state, run_axis_mask=run_mask, base_valid_mask=base_mask))
+                    # 下位机暂未做心跳机制，心跳登记/恢复/转发逻辑先注释（恢复时取消注释即可）
+                    pass
+                    # state = data[0]
+                    # run_mask = struct.unpack_from('>I', b'\x00' + data[1:4])[0] if len(data) >= 4 else 0
+                    # base_mask = struct.unpack_from('>I', b'\x00' + data[4:7])[0] if len(data) >= 7 else 0
+                    # self.node_heartbeats[node] = {"time": rospy.Time.now().to_sec(),
+                    #                               "state": state, "run": run_mask, "base": base_mask}
+                    # self.node_lost.discard(node)
+                    # self.pub_heartbeat.publish(Heartbeat(
+                    #     header=self._header(), module_id=module_id, node_id=node,
+                    #     state=state, run_axis_mask=run_mask, base_valid_mask=base_mask))
                 elif mnum == 1:                                  # 看门狗告警
                     rospy.logerr("🚨 节点%d 看门狗告警 Src=%d Action=%d", node, data[0], data[1])
+                    self._archive_event(module_id, node, self.EVT_WDG_WARN,
+                                        {"src": data[0], "action": data[1]}, "下位机看门狗告警")
                 elif mnum == 2:                                  # 节点故障
                     rospy.logerr("❌ 节点%d 故障 Err=%d Sev=%d TEC=%d REC=%d",
                                  node, data[0], data[1], data[2], data[3])
+                    self._archive_event(module_id, node, self.EVT_NODE_FAULT,
+                                        {"err": data[0], "sev": data[1], "tec": data[2], "rec": data[3]},
+                                        "节点故障")
                 elif mnum == 3:                                  # 启动握手
                     rospy.loginfo("🤝 节点%d 上线 v%d.%d.%d type=%d",
                                   node, data[0], data[1], data[3], data[2])
+                    self._archive_event(module_id, node, self.EVT_BOOT,
+                                        {"ver_major": data[0], "ver_minor": data[1],
+                                         "ver_patch": data[3], "node_type": data[2]},
+                                        "节点上线握手")
             elif direction == self.DIR_EVENT and mnum == 0:      # 吸盘失压（PRI=0 臂级）
                 pressure_raw = struct.unpack_from('>i', data, 0)[0] if len(data) >= 4 else 0
                 loss_th = struct.unpack_from('>H', data, 4)[0] if len(data) >= 6 else 0
@@ -353,6 +534,9 @@ class CANBusBridge:
                     pressure_raw=pressure_raw, loss_threshold=loss_th))
                 rospy.logerr("🌀 吸盘失压 臂=%d pressure=%d threshold=%d",
                              axis - self.sensor_arm_base + 1, pressure_raw, loss_th)
+                self._archive_event(module_id, device_id, self.EVT_VACUUM_LOSS,
+                                    {"pressure_raw": pressure_raw, "loss_threshold": loss_th},
+                                    "吸盘失压")
             return
 
         # ---------------- GRP=2 运动反馈 ----------------
@@ -386,6 +570,9 @@ class CANBusBridge:
                 self.pub_cmd_ack.publish(CmdAck(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     ack_msg=ack_msg, result=result, detail=detail))
+                self._archive_event(module_id, device_id, self.EVT_CMD_ACK,
+                                    {"ack_msg": ack_msg, "result": result, "detail": detail},
+                                    "命令应答")
                 if result != 0:
                     rospy.logwarn("📝 轴%d 命令应答 result=%d(0=接受1忙2基准3越界4故障5急停锁存)",
                                   axis, result)
@@ -401,10 +588,17 @@ class CANBusBridge:
                 self.pub_arrive.publish(ArriveNotification(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     angle=angle, pos_error=pos_err, status_bits=sb, flags=fl))
+                self._archive_event(module_id, device_id, self.EVT_ARRIVE,
+                                    {"angle": angle, "pos_error": pos_err,
+                                     "status_bits": sb, "flags": fl},
+                                    "轴到位")
             elif mnum == 1:                                      # 停止通知 DLC=2
                 self.pub_stop.publish(StopNotification(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     stop_reason=data[0], output_level=data[1]))
+                self._archive_event(module_id, device_id, self.EVT_STOP,
+                                    {"stop_reason": data[0], "output_level": data[1]},
+                                    "轴停止")
             elif mnum == 2:                                      # 轴故障事件 DLC=6
                 fault_bits = struct.unpack_from('>H', data, 0)[0] if len(data) >= 2 else 0
                 la = data[2] if len(data) >= 3 else 0
@@ -414,6 +608,10 @@ class CANBusBridge:
                     header=self._header(), module_id=module_id, device_id=device_id,
                     fault_bits=fault_bits, local_action=la, detail=det, duration_ms=dur))
                 rospy.logerr("❌ 轴%d 故障 bits=0x%04X", axis, fault_bits)
+                self._archive_event(module_id, device_id, self.EVT_AXIS_FAULT,
+                                    {"fault_bits": fault_bits, "local_action": la,
+                                     "detail": det, "duration_ms": dur},
+                                    "轴故障")
             elif mnum == 3:                                      # 回零状态 DLC=6
                 hr = data[0]
                 bv = data[1]
@@ -422,11 +620,17 @@ class CANBusBridge:
                     header=self._header(), module_id=module_id, device_id=device_id,
                     home_result=hr, base_valid=bv, angle=angle))
                 rospy.loginfo("🏠 轴%d 回零 result=%d base_valid=%d angle=%d", axis, hr, bv, angle)
+                self._archive_event(module_id, device_id, self.EVT_HOME,
+                                    {"home_result": hr, "base_valid": bv, "angle": angle},
+                                    "回零状态")
             elif mnum == 4:                                      # 限位事件 DLC=2
                 self.pub_limit_event.publish(LimitEvent(
                     header=self._header(), module_id=module_id, device_id=device_id,
                     limit_type=data[0], output_level=data[1]))
                 rospy.logwarn("⚠️ 轴%d 限位 type=%d", axis, data[0])
+                self._archive_event(module_id, device_id, self.EVT_LIMIT,
+                                    {"limit_type": data[0], "output_level": data[1]},
+                                    "限位触发")
             return
 
         # ---------------- GRP=4 传感器（臂级 axis 21~25）----------------
@@ -455,17 +659,21 @@ class CANBusBridge:
             rospy.logwarn_throttle(10.0, "🩺 CAN 链路 节点%d TEC=%d REC=%d", node, data[0], data[1])
 
     def _dispatch_axis_feedback(self, module_id, device_id, axis, angle):
-        """按轴号分发到旋转/摆动/伸缩原始反馈话题（0.01°）；module_id 为帧 SEG 位域"""
+        """按轴号分发到旋转/摆动/伸缩原始反馈话题（0.01°）；module_id 为帧 SEG 位域。
+        同时将该反馈视为"轴编码器信息回传"：清除该轴等待标记并立即补发下一帧增量"""
+        with self.tx_lock:
+            was_waiting = self.tx_waiting.pop(axis, None) is not None
+        if was_waiting:
+            self._try_send_next(axis)
         fb = Feedback(header=self._header(), module_id=module_id,
                       device_id=device_id, position=[float(angle)])
-        joint_idx = (axis - 1) % 4
-        if joint_idx == 0:          # J1 旋转：轴 1,5,9,13,17
+        joint_idx = (axis - 1) % 3
+        if joint_idx == 0:          # J1 旋转：轴 1,4,7,10,13
             self.pub_rot_raw.publish(fb)
-        elif joint_idx == 1:        # J2 摆动：轴 2,6,10,14,18
+        elif joint_idx == 1:        # J2 摆动：轴 2,5,8,11,14
             self.pub_swing_raw.publish(fb)
-        elif joint_idx == 3:        # J4 伸缩：轴 4,8,12,16,20
+        else:                       # J3 伸缩：轴 3,6,9,12,15
             self.pub_tel_raw.publish(fb)
-        # joint_idx == 2 是 J3 空置，忽略
 
     # ---------- IMU 两帧合并（臂级）----------
     def _cache_imu(self, axis, module_id, gyro=None, accel=None):
@@ -490,17 +698,19 @@ class CANBusBridge:
 
     # ======================================================================
     # 心跳看门狗
+    # 下位机暂未做心跳机制，超时急停巡检逻辑整体注释（恢复时连同上方 Timer 一起取消注释）
     # ======================================================================
-    def _heartbeat_watchdog(self, event):
-        now = rospy.Time.now().to_sec()
-        for node in range(1, self.node_count + 1):
-            hb = self.node_heartbeats.get(node)
-            if hb is None:
-                continue
-            if now - hb["time"] > self.heartbeat_timeout and node not in self.node_lost:
-                self.node_lost.add(node)
-                rospy.logerr("🚨 节点%d 心跳超时 %.0fms，广播急停！", node, self.heartbeat_timeout * 1000)
-                self._send_can_frame(0x00000000, bytes([0x01]))
+    # def _heartbeat_watchdog(self, event):
+    #     now = rospy.Time.now().to_sec()
+    #     for node in range(1, self.node_count + 1):
+    #         hb = self.node_heartbeats.get(node)
+    #         if hb is None:
+    #             continue
+    #         if now - hb["time"] > self.heartbeat_timeout and node not in self.node_lost:
+    #             self.node_lost.add(node)
+    #             rospy.logerr("🚨 节点%d 心跳超时 %.0fms，广播急停！", node, self.heartbeat_timeout * 1000)
+    #             self._clear_all_queues()
+    #             self._send_can_frame(0x00000000, bytes([0x01]))
 
     # ======================================================================
     # 数据库归档
@@ -524,10 +734,27 @@ class CANBusBridge:
                 Notes TEXT,
                 PRIMARY KEY (Createtime, sensor_ID)
             );
+
+            -- 事件日志表：到位/停止/故障/回零/限位/命令应答/失压/系统事件
+            CREATE TABLE IF NOT EXISTS can_event_log (
+                Createtime DATETIME NOT NULL,
+                module_id INTEGER NOT NULL,
+                device_id INTEGER NOT NULL,
+                event_type INTEGER NOT NULL,
+                creater_id INTEGER NOT NULL DEFAULT 1,
+                Work_ID INTEGER NOT NULL DEFAULT 1,
+                isread INTEGER NOT NULL DEFAULT 1,
+                data TEXT NOT NULL,
+                del_flag BOOL DEFAULT false,
+                Notes TEXT,
+                PRIMARY KEY (Createtime, device_id, event_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_time ON can_event_log(Createtime);
+            CREATE INDEX IF NOT EXISTS idx_event_device ON can_event_log(device_id, event_type);
         """)
         self.db_conn.commit()
         rospy.Timer(rospy.Duration(1.0), self._sync_db)
-        rospy.loginfo("🗄️ CAN 数据归档库已连接（sensor_log）")
+        rospy.loginfo("🗄️ CAN 数据归档库已连接（sensor_log + can_event_log）")
 
     def _insert_sensor_log(self, module_id, device_id, payload, note):
         """写入 sensor_log：isread=1（上行），具体数据以 JSON 存入 data 字段"""
@@ -563,6 +790,26 @@ class CANBusBridge:
                 }, "IMU惯性数据")
             except Exception as e:
                 rospy.logerr_throttle(10.0, "sensor_log 归档失败: %s", e)
+
+    def _insert_event_log(self, module_id, device_id, event_type, payload, note):
+        """写入 can_event_log：isread=1（上行），事件详情以 JSON 存入 data 字段"""
+        # 微秒级时间戳：同一秒内同轴可能连发多种事件（如故障+停止），秒级会触发主键冲突
+        createtime = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        data_json = json.dumps(payload, ensure_ascii=False)
+        self.db_conn.execute(
+            "INSERT INTO can_event_log"
+            " (Createtime, module_id, device_id, event_type, creater_id, Work_ID, isread, data, del_flag, Notes)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (createtime, module_id, device_id, event_type, 1, 1, 1, data_json, 0, note))
+        self.db_dirty = True
+
+    def _archive_event(self, module_id, device_id, event_type, payload, note):
+        """归档事件类上行数据到 can_event_log；module_id 取 CAN 帧 SEG"""
+        with self.db_lock:
+            try:
+                self._insert_event_log(module_id, device_id, event_type, payload, note)
+            except Exception as e:
+                rospy.logerr_throttle(10.0, "can_event_log 归档失败: %s", e)
 
     def _sync_db(self, event):
         if self.db_dirty:

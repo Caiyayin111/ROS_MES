@@ -282,6 +282,30 @@ def create_database(db_path=DB_PATH):
         );
     """)
 
+    # ----- CAN 事件日志表（hardware_node 归档到位/停止/故障/限位等事件）-----
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS can_event_log (
+            Createtime DATETIME NOT NULL,
+            module_id INTEGER NOT NULL,
+            device_id INTEGER NOT NULL,
+            event_type INTEGER NOT NULL,
+            creater_id INTEGER NOT NULL DEFAULT 1,
+            Work_ID INTEGER NOT NULL DEFAULT 1,
+            isread INTEGER NOT NULL DEFAULT 1,
+            data TEXT NOT NULL,
+            del_flag BOOLEAN DEFAULT 0,
+            Notes TEXT,
+            PRIMARY KEY (Createtime, device_id, event_type)
+        );
+    """)
+    # 按时间检索、按轴+事件类型检索的辅助索引
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_event_time ON can_event_log(Createtime);
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_event_device ON can_event_log(device_id, event_type);
+    """)
+
     # ----- 计算解析数据日志表 -----
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS calculation (
@@ -507,6 +531,7 @@ def create_database(db_path=DB_PATH):
             "UPDATE workflows SET del_flag = 0 WHERE del_flag IS NULL",
             "UPDATE work_flow_relations SET del_flag = 0 WHERE del_flag IS NULL",
             "UPDATE sensor_log SET del_flag = 0 WHERE del_flag IS NULL",
+            "UPDATE can_event_log SET del_flag = 0 WHERE del_flag IS NULL",
             "UPDATE calculation SET del_flag = 0 WHERE del_flag IS NULL",
             "UPDATE point_data SET del_flag = 0 WHERE del_flag IS NULL",
             "UPDATE Users SET del_flag = 0 WHERE del_flag IS NULL",

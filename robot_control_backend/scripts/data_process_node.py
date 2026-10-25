@@ -214,15 +214,14 @@ def split_into_modules(points):
                 continue
 
             arm_x = x0 + 5
-            arm_y1 = y0 + 5
-            arm_y2 = y0 + 15
-            arm_y3 = y0 + 25
             module_id = (i + 1) * 16 + (j + 1)
+            # 5 臂均分模块 Y 向尺寸，臂基座落在各等分区间中点
+            arms = [[arm_x, y0 + MODULE_SIZE_Y * (k + 0.5) / 5.0, 0] for k in range(5)]
 
             modules.append({
                 "module_id": module_id,
                 "points": seg.tolist(),
-                "arms": [[arm_x, arm_y1, 0], [arm_x, arm_y2, 0], [arm_x, arm_y3, 0]]
+                "arms": arms
             })
     return modules
 

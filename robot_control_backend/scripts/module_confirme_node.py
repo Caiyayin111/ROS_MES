@@ -1,30 +1,41 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-模块确认节点 V2 —— 基于 CAN「到位通知」事件帧的三重到位判定
+模块确认节点 V2.1 —— 固定工位会话式握手（UID 领号 + SEG 会话分配）
 
-V2 到位通知 ArriveNotification 字段：
-    module_id, device_id, angle(int32, 0.01°), pos_error(int16), status_bits(uint8), flags(uint8)
+方案来源：《固定工位会话式模块确认方案》
+核心规则：
+  - 模块号 = SEG（0~14），由固定工位决定：工位 N（1~15）→ SEG = N-1
+  - F407 上电即未编号（运行期 SEG=0xFF），周期发送未编号宣告，不读 Flash
+  - 上位机收到宣告后按工位分配 SEG，设备回确认帧；
+    必须同时核对 UID56、SEG、Result=0 三项才判定握手成功
+  - 断电后重新上电必须重新握手（会话表仅本次运行有效，不入库）
 
-V2 到位判定（三重校验，对齐设计文档 §5.3.5 StatusBits 定义）：
-    1. |angle - 目标| <= MODULE_CONFIRM_TOLERANCE（0.01° 单位）
-    2. status_bits 的到位位（**bit2=0x04**）置位
-    3. |pos_error| <= 容差
+接口（与后端原契约保持一致）：
+  输入：/control/module_cmd (IntCmd)
+        module_id 原样透传（后端业务模块号，用于回执匹配）
+        device_id 固定 0
+        position = [100, station]：100=触发握手，station=工位号 1~15
+  输出：/hardware/module_confirm_success（position=[100]）
+        /hardware/web_module_cmd（position=[1]，失败，后端回 HTTP 502）
 
-工作流：
-    1. 上位机向 /control/module_cmd 下发目标（IntCmd，position[0] 为 0.01° 角度）
-       → 转发到 /arm/cmd_vel，并登记待确认记录
-    2. 到位事件 /hardware/arrive_notification 到达 → 按 device_id 匹配并三重校验
-    3. 超差或超时 → 失败
+状态机（同一时间只确认一组，新指令会取消进行中的握手）：
+  IDLE → WAIT_ANNOUNCE →(收到宣告)→ WAIT_CONFIRM →(三项核对通过)→ IDLE + 工位 READY
+  等待宣告超时 / 分配确认 3 次无应答 → 失败回执 → IDLE
 """
 import os
+import threading
 
 import rospy
 from std_msgs.msg import Header
-from robot_control_backend.msg import IntCmd, ArriveNotification
+from robot_control_backend.msg import IntCmd, UidAnnounce, SegAssign, SegConfirm
+
+# 握手状态
+IDLE, WAIT_ANNOUNCE, WAIT_CONFIRM = 0, 1, 2
 
 
 def load_env_config():
+    """从 .env 文件加载配置"""
     env_path = os.path.join(os.path.dirname(__file__), '../rob_arm.env')
     if os.path.exists(env_path):
         with open(env_path, 'r') as f:
@@ -33,112 +44,187 @@ def load_env_config():
                 if line and not line.startswith('#') and '=' in line:
                     key, value = line.split('=', 1)
                     os.environ[key] = value
-        rospy.loginfo("✅ 已从 rob_arm.env 加载配置")
+        rospy.loginfo("✅ 模块确认节点已从 rob_arm.env 加载配置")
 
 
-class ModuleConfirm:
-    RESULT_SUCCESS = 100
-    RESULT_FAILED = -1
-    # V2 status_bits（对齐设计文档 §5.3.5 轴状态字定义）：
-    #   bit0 使能　bit1 运行　**bit2 到位**　bit3 上限位　bit4 下限位
-    #   bit5 故障　bit6 轴忙　bit7 急停锁存　bit8 基准有效
-    STATUS_IN_POSITION_MASK = 0x04  # bit2 = 到位位置位
+class ModuleSessionConfirmer:
+    """固定工位会话式模块确认：宣告 → 分配 → 核对确认 → READY"""
+
+    RESULT_SUCCESS = 100   # 后端契约：position[0]==100 成功
+    RESULT_FAILED = 1      # 后端契约：position[0]==1 失败（HTTP 502）
 
     def __init__(self):
         load_env_config()
         rospy.init_node("module_confirme_node")
-        rospy.loginfo("✅ 模块确认节点 V2 已启动（到位三重判定：角度+PosError+Status）")
 
-        # V2：容差单位为 0.01°（配置 MODULE_CONFIRM_TOLERANCE，100 = 1.00°）
-        self.tolerance = int(os.environ['MODULE_CONFIRM_TOLERANCE'])
-        self.timeout_sec = float(os.environ['MODULE_CONFIRM_TIMEOUT'])
+        # 参数全部只读 rob_arm.env，无硬编码默认值
+        self.wait_announce_s = float(os.environ['MODULE_CONFIRM_WAIT_ANNOUNCE_S'])
+        self.ack_timeout_s = float(os.environ['MODULE_CONFIRM_ACK_TIMEOUT_S'])
+        self.max_retry = int(os.environ['MODULE_CONFIRM_MAX_RETRY'])
 
-        # 话题全部只读 rob_arm.env（无硬编码默认值，env 改了上下游自动一致）
-        TOPIC_ARM_CMD_VEL = os.environ['ROS_TOPIC_ARM_CMD_VEL']
-        TOPIC_MODULE_CONFIRM_SUCCESS = os.environ['ROS_TOPIC_MODULE_CONFIRM_SUCCESS']
-        TOPIC_MODULE_CONFIRM_FAILED = os.environ['ROS_TOPIC_MODULE_CONFIRM_FAILED']
-        TOPIC_MODULE_CMD = os.environ['ROS_TOPIC_MODULE_CMD']
-        TOPIC_ARRIVE = os.environ['ROS_TOPIC_ARRIVE_NOTIFICATION']
+        # 话题全部只读 rob_arm.env
+        self.pub_assign = rospy.Publisher(
+            os.environ['ROS_TOPIC_SEG_ASSIGN'], SegAssign, queue_size=10)
+        self.pub_success = rospy.Publisher(
+            os.environ['ROS_TOPIC_MODULE_CONFIRM_SUCCESS'], IntCmd, queue_size=10)
+        self.pub_failed = rospy.Publisher(
+            os.environ['ROS_TOPIC_MODULE_CONFIRM_FAILED'], IntCmd, queue_size=10)
+        rospy.Subscriber(os.environ['ROS_TOPIC_MODULE_CMD'], IntCmd, self.cb_module_cmd)
+        rospy.Subscriber(os.environ['ROS_TOPIC_UID_ANNOUNCE'], UidAnnounce, self.cb_announce)
+        rospy.Subscriber(os.environ['ROS_TOPIC_SEG_CONFIRM'], SegConfirm, self.cb_confirm)
 
-        self.pub_cmd = rospy.Publisher(TOPIC_ARM_CMD_VEL, IntCmd, queue_size=10)
-        self.pub_success = rospy.Publisher(TOPIC_MODULE_CONFIRM_SUCCESS, IntCmd, queue_size=10)
-        self.pub_failed = rospy.Publisher(TOPIC_MODULE_CONFIRM_FAILED, IntCmd, queue_size=10)
+        self.lock = threading.Lock()
+        self.state = IDLE
+        # 当前握手上下文：{req_module_id, station, seg, uid56, seq, retries, deadline}
+        self.current = None
+        # 会话表：工位号 1~15 -> {"uid56", "seg", "ts"}；仅本次运行有效，断电需重新握手
+        self.session = {}
 
-        rospy.Subscriber(TOPIC_MODULE_CMD, IntCmd, self.cb_upper_cmd)
-        rospy.Subscriber(TOPIC_ARRIVE, ArriveNotification, self.cb_arrive)
+        rospy.Timer(rospy.Duration(0.05), self._check_timeout)
+        rospy.loginfo("✅ 模块确认节点已启动（固定工位会话式握手：等宣告 %.1fs / 确认 %.2fs × %d 次）",
+                      self.wait_announce_s, self.ack_timeout_s, self.max_retry)
 
-        # V2：待确认记录按 device_id 索引
-        self.pending = {}
-
-        rospy.Timer(rospy.Duration(0.2), self._check_timeout)
-
-    def cb_upper_cmd(self, msg):
-        device_id = int(msg.device_id)
-        # V2：device_id 即轴号 1~20（到位确认仅针对运动轴）
-        if not (1 <= device_id <= 20):
-            rospy.logwarn("⚠️ 模块确认指令 device_id=%d 非法（允许轴号 1~20），已忽略", device_id)
+    # ================= 入口：后端模块确认指令 =================
+    def cb_module_cmd(self, msg):
+        """/control/module_cmd：position=[100, station]，station=工位号 1~15（组号）"""
+        if not msg.position or int(msg.position[0]) != 100:
+            rospy.logwarn("⚠️ 模块确认指令 position[0] 应为 100（握手触发），收到 %s，已忽略",
+                          list(msg.position))
             return
-        if not msg.position:
-            rospy.logwarn("⚠️ 模块确认指令缺少目标位置 position，已忽略")
+        if len(msg.position) < 2:
+            self._publish_result(self.pub_failed, int(msg.module_id),
+                                 self.RESULT_FAILED, "缺少工位号：position 需为 [100, station(1~15)]")
             return
-
-        target_centideg = int(msg.position[0])
-
-        self.pub_cmd.publish(msg)
-
-        self.pending[device_id] = {
-            "module_id": msg.module_id,
-            "device_id": device_id,
-            "target": target_centideg,
-            "deadline": rospy.Time.now() + rospy.Duration(self.timeout_sec),
-        }
-        rospy.loginfo("[模块确认] 已下发并登记 device_id=%d 目标角度=%.2f°（超时%.1fs）",
-                      device_id, target_centideg * 0.01, self.timeout_sec)
-
-    def cb_arrive(self, msg):
-        device_id = int(msg.device_id)
-        record = self.pending.get(device_id)
-        if record is None:
-            rospy.loginfo("收到 device_id=%d 到位通知，但无待确认记录，忽略", device_id)
+        station = int(msg.position[1])
+        if not (1 <= station <= 15):
+            self._publish_result(self.pub_failed, int(msg.module_id),
+                                 self.RESULT_FAILED, f"工位号 {station} 非法（1~15）")
             return
 
-        target = record["target"]
-        actual_angle = int(msg.angle)
-        pos_error = int(msg.pos_error)
-        status_bits = int(msg.status_bits)
+        with self.lock:
+            if self.state != IDLE:
+                rospy.logwarn("↪️ 取消工位%d 进行中的握手，切换至工位%d",
+                              self.current["station"] if self.current else -1, station)
+            # 工位 N → SEG = N-1；进入等待宣告（操作员此时给目标组上电）
+            self.current = {
+                "req_module_id": int(msg.module_id),   # 后端业务模块号，回执原样返回
+                "station": station,
+                "seg": station - 1,
+                "uid56": None,
+                "seq": 0,
+                "retries": 0,
+                "deadline": rospy.Time.now() + rospy.Duration(self.wait_announce_s),
+            }
+            self.state = WAIT_ANNOUNCE
+        rospy.loginfo("🔌 开始确认工位%d（期望 SEG=%d），请给该组上电，等待未编号宣告（%.1fs）",
+                      station, station - 1, self.wait_announce_s)
 
-        # V2 三重判定
-        angle_diff = abs(actual_angle - target)
-        in_position = bool(status_bits & self.STATUS_IN_POSITION_MASK)
-        error_ok = abs(pos_error) <= self.tolerance
-        angle_ok = angle_diff <= self.tolerance
+    # ================= 宣告处理 =================
+    def cb_announce(self, msg):
+        """收到未编号宣告：握手中则立即分配；否则检测"已 READY 组重新上电" """
+        with self.lock:
+            if self.state == WAIT_ANNOUNCE:
+                self.current["uid56"] = int(msg.uid56)
+                self._send_assign_locked(seq=1)
+                self.current["retries"] = 1
+                self.current["deadline"] = rospy.Time.now() + rospy.Duration(self.ack_timeout_s)
+                self.state = WAIT_CONFIRM
+                rospy.loginfo("📢 收到宣告：UID56=%X（槽%d）→ 分配 SEG=%d，Seq=1",
+                              msg.uid56, msg.slot, self.current["seg"])
+                return
+            # 非握手期间收到宣告：若为已 READY 工位的 UID，说明该组断电重启，会话失效
+            stale = [s for s, rec in self.session.items() if rec["uid56"] == int(msg.uid56)]
+            for s in stale:
+                del self.session[s]
+                rospy.logwarn("🔌 工位%d（SEG=%d）重新上电，会话已失效，需重新确认", s, s - 1)
+            if not stale:
+                rospy.loginfo("📢 收到未请求宣告：UID56=%X（槽%d），如需启用请下发模块确认指令",
+                              msg.uid56, msg.slot)
 
-        if angle_ok and in_position and error_ok:
-            self._publish_result(self.pub_success, record, self.RESULT_SUCCESS,
-                                 "到位成功 device=%d 角度差=%d(0.01°) PosError=%d Status=0x%02X"
-                                 % (device_id, angle_diff, pos_error, status_bits))
-        else:
-            self._publish_result(self.pub_failed, record, self.RESULT_FAILED,
-                                 "到位判定失败 device=%d angle_ok=%s in_pos=%s error_ok=%s "
-                                 "角度差=%d PosError=%d Status=0x%02X"
-                                 % (device_id, angle_ok, in_position, error_ok,
-                                    angle_diff, pos_error, status_bits))
-        del self.pending[device_id]
+    # ================= 分配确认处理 =================
+    def cb_confirm(self, msg):
+        """分配确认帧：三项核对（UID56、SEG、Result=0）全部通过才判定握手成功"""
+        with self.lock:
+            if self.state != WAIT_CONFIRM or self.current is None:
+                return
+            cur = self.current
+            if int(msg.uid56) != cur["uid56"] or int(msg.seg) != cur["seg"]:
+                rospy.logwarn("⚠️ 确认帧不匹配（UID56=%X/SEG=%d，期望 %X/%d），忽略",
+                              msg.uid56, msg.seg, cur["uid56"], cur["seg"])
+                return
+            if int(msg.result) != 0:
+                rospy.logwarn("⚠️ 设备写入 SEG 失败 Result=%d，按重试处理", msg.result)
+                self._retry_or_fail_locked("设备返回 Result=%d" % msg.result)
+                return
+            # 三项核对通过：握手成功，登记会话表
+            self.session[cur["station"]] = {
+                "uid56": cur["uid56"], "seg": cur["seg"],
+                "ts": rospy.Time.now().to_sec(),
+            }
+            station, req_mid, seg = cur["station"], cur["req_module_id"], cur["seg"]
+            self.current = None
+            self.state = IDLE
+        self._publish_result(self.pub_success, req_mid, self.RESULT_SUCCESS,
+                             "工位%d（SEG=%d）握手成功 UID56=%X" % (station, seg, msg.uid56))
 
+    # ================= 超时与重试 =================
     def _check_timeout(self, _event):
-        now = rospy.Time.now()
-        expired = [did for did, rec in self.pending.items() if now >= rec["deadline"]]
-        for did in expired:
-            record = self.pending.pop(did)
-            self._publish_result(self.pub_failed, record, self.RESULT_FAILED,
-                                 "到位超时 device=%d 目标=%.2f°（>%.1fs）"
-                                 % (did, record["target"] * 0.01, self.timeout_sec))
+        with self.lock:
+            if self.state == IDLE or self.current is None:
+                return
+            if rospy.Time.now() < self.current["deadline"]:
+                return
+            if self.state == WAIT_ANNOUNCE:
+                cur = self.current
+                self.current = None
+                self.state = IDLE
+                text = "等待宣告超时（%.1fs）：请检查该组电源、CAN 接线" % self.wait_announce_s
+            else:  # WAIT_CONFIRM 超时：Seq 递增重发，最多 max_retry 次
+                if self.current["retries"] < self.max_retry:
+                    self.current["seq"] += 1
+                    self.current["retries"] += 1
+                    self._send_assign_locked(self.current["seq"])
+                    self.current["deadline"] = rospy.Time.now() + rospy.Duration(self.ack_timeout_s)
+                    rospy.logwarn("⏳ 分配确认超时，重发第 %d/%d 次（Seq=%d）",
+                                  self.current["retries"], self.max_retry, self.current["seq"])
+                    return
+                cur = self.current
+                self.current = None
+                self.state = IDLE
+                text = "分配确认 %d 次无应答：请检查该组电源、CAN 接线、UID 是否变化" % self.max_retry
+        self._publish_result(self.pub_failed, cur["req_module_id"], self.RESULT_FAILED,
+                             "工位%d 握手失败：%s" % (cur["station"], text))
 
-    def _publish_result(self, publisher, record, result_code, log_text):
+    def _retry_or_fail_locked(self, reason):
+        """设备回了非 0 确认：按一次失败重试处理（持锁调用）"""
+        if self.current["retries"] < self.max_retry:
+            self.current["seq"] += 1
+            self.current["retries"] += 1
+            self._send_assign_locked(self.current["seq"])
+            self.current["deadline"] = rospy.Time.now() + rospy.Duration(self.ack_timeout_s)
+        else:
+            cur = self.current
+            self.current = None
+            self.state = IDLE
+            self._publish_result(self.pub_failed, cur["req_module_id"], self.RESULT_FAILED,
+                                 "工位%d 握手失败：%s（重试 %d 次）" % (cur["station"], reason, self.max_retry))
+
+    def _send_assign_locked(self, seq):
+        """发分配请求（持锁调用）：hardware_node 桥接为 CAN 帧 0x15BC0010"""
+        m = SegAssign()
+        m.header = Header(stamp=rospy.Time.now())
+        m.target_uid56 = self.current["uid56"]
+        m.seg = self.current["seg"]
+        m.seq = seq
+        self.pub_assign.publish(m)
+
+    # ================= 回执（保持后端契约） =================
+    def _publish_result(self, publisher, req_module_id, result_code, log_text):
+        """成功/失败回执：module_id 原样返回请求值，device_id=0，position=[100|1]"""
         m = IntCmd()
         m.header = Header(stamp=rospy.Time.now())
-        m.module_id = record["module_id"]
-        m.device_id = record["device_id"]
+        m.module_id = req_module_id
+        m.device_id = 0
         m.position = [result_code]
         publisher.publish(m)
         if result_code == self.RESULT_SUCCESS:
@@ -146,15 +232,12 @@ class ModuleConfirm:
         else:
             rospy.logwarn("[模块确认失败] %s", log_text)
 
-    def run(self):
-        rospy.spin()
-
 
 if __name__ == "__main__":
     try:
-        node = ModuleConfirm()
-        node.run()
+        node = ModuleSessionConfirmer()
+        rospy.spin()
     except rospy.ROSInterruptException:
         rospy.loginfo("❌ 模块确认节点停止")
     except Exception as e:
-        rospy.logerr("❌ 模块节点异常: %s" % str(e))
+        rospy.logerr("❌ 模块确认节点异常: %s" % str(e))

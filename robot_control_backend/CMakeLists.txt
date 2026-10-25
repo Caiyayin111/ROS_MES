@@ -67,6 +67,9 @@ find_package(catkin REQUIRED COMPONENTS
  AxisFault.msg
  LimitEvent.msg
  VacuumLoss.msg
+ UidAnnounce.msg
+ SegAssign.msg
+ SegConfirm.msg
 )
 
 ## Generate services in the 'srv' folder
