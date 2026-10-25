@@ -404,7 +404,7 @@ float64[] position        # 相对增量角度，单位：度（按 ±MAX_SWING_
 std_msgs/Header header
 uint8 module_id           # 模块编号
 uint16 device_id          # 伸缩轴 J4：AXIS = 4, 8, 12, 16, 20（J3 空置）
-float64[] position        # 指令：相对增量 mm；反馈：角度（度）
+float64[] position        # 指令：相对增量 mm（轴节点按 0~30mm 检查后换算 0.01mm 下发 CAN）；反馈：实测长度，单位 mm（CAN 字段 0.01mm 由 feedback_node 换算）
 ```
 
 > mm↔度换算由 telescopic_node/kinematics_node 完成。

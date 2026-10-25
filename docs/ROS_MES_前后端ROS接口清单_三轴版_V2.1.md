@@ -129,10 +129,10 @@ ROS 侧超时参数（rob_arm.env）：等宣告 `MODULE_CONFIRM_WAIT_ANNOUNCE_S
 
 `/hardware/cmd_ack` 已加入后端反馈流（`data_type=cmd_ack`，透传 `result/detail`）。前端 FineTuningPage 可按该标签提示"超位被拒绝"。
 
-### 🟡 7.5 伸缩反馈单位是"度"不是"mm"（**挂起：等下位机给真实系数**）
+### 🟡 7.5 伸缩轴单位（**已定论：话题边界两向均为 mm，MM_PER_REV 废弃**）
 
-`/hardware/telescope_feedback` 的 position 为电机转角（°）。前端若按 mm 展示会差 `MM_PER_REV/360` 倍（当前 MM_PER_REV=0.7）。
-**2026-10-25 ROS 端确认：0.7 为占位值，换算还没测完，真实系数等下位机提供。** 拿到真值后的动作：ROS 端改 `rob_arm.env` 与 `deploy/config/rob_arm.env` 两处；前端用同一系数补反馈"度→mm"显示换算。在那之前前端不做换算，伸缩反馈数值按"度"理解。
+**2026-10-25 晚 ROS 端定稿并已推送（3ed42f3《更新伸缩杆执行层逻辑》）**：电机3 为直线位移轴，下位机 CAN 字段单位 0.01mm——`telescopic_node` 接收 **mm 增量**（0~30mm 软限位、首帧反馈前拒绝增量，内部 ×100 透传 CAN）、`feedback_node` 回传 **mm 实测长度**（CAN 0.01mm ÷100），`TelescopicCmd.msg` 注释同步更新。
+即：**ROS 话题边界两向均为 mm，与前后端语义天然一致——后端零换算、前端零改动**（MM_PER_REV 参数废弃；此前我方按"话题 0.01mm"做的 ×100/position_mm 预实现已撤销）。伸缩显示直接用反馈 position（mm），伸缩下发直接传 mm 增量。
 
 ### 🟡 7.6 反馈 module_id 是 SEG，不是业务模块号
 

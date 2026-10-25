@@ -86,6 +86,8 @@ def build_fine_tuning_publish_payload(
     if module_id <= 0:
         raise RosbridgeError(f"微调 module_id={module_id} 非法（必须由前端下发正整数模块号）")
 
+    # 伸缩轴单位契约（2026-10-25 ROS 端 3ed42f3 定稿）：话题边界两向均为 mm
+    # （CAN 层的 0.01mm 由 ROS 节点内部换算），旋转/摆动为度——后端全部原样透传。
     return {
         "topic": mapping["topic"],
         "message_type": mapping["message_type"],
