@@ -9,7 +9,27 @@ import sqlite3
 import os
 from passlib.context import CryptContext
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "ros_database.db")
+def _find_project_root(start_dir: str) -> str:
+    """与 app/core/config.py 相同的仓库根查找逻辑（本脚本保持独立可运行，故复制一份）。
+
+    判定标记：目录下存在 robot_control_backend（ROS 端包）或 .git。
+    """
+    current = os.path.abspath(start_dir)
+    while True:
+        if os.path.isdir(os.path.join(current, "robot_control_backend")) or os.path.isdir(
+            os.path.join(current, ".git")
+        ):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return current
+        current = parent
+
+
+# 数据库固定在仓库根目录，与后端 DATABASE_URL 默认值一致
+DB_PATH = os.path.join(
+    os.getenv("PROJECT_ROOT") or _find_project_root(os.path.dirname(__file__)), "ros_database.db"
+)
 
 def create_database(db_path=DB_PATH):
     """

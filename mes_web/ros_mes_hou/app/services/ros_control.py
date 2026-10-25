@@ -10,23 +10,13 @@ try:
 except ImportError:
     websockets = None
 
-# ==========================================
-# 1. 黑魔法：路径自动寻址 (绝对路径)
-# ==========================================
-# 获取当前文件 (ros_control.py) 的绝对目录
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+from app.core.config import settings
 
-# 向上推 3 层，到达项目根目录 (即包含 ros_mes_hou 和 robot_control_backend 的文件夹)
-PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "../../../"))
-
-# 精准锁定 ROS 脚本存放位置
-SCRIPTS_DIR = os.path.join(PROJECT_ROOT, "robot_control_backend", "scripts")
+# ROS 脚本目录统一收敛到 app/core/config.py（ROS_SCRIPTS_DIR，可用环境变量覆盖）
+SCRIPTS_DIR = settings.ROS_SCRIPTS_DIR
 
 # 你的执行环境（如果你在 venv 里无法运行 ROS 库，可将此改为 "/usr/bin/python3" 或具体的 conda/ros 环境路径）
 PYTHON_CMD = "python"
-
-# WebSocket 地址（web_data_node 的 rosbridge 桥接端口）
-WEBSOCKET_URI = "ws://localhost:8760"
 # V2：全局急停为系统级指令，module_id=0 / device_id=0（不使用静态模块编号），
 # softstop_node 收到后转发 position=[0x01] 全局急停
 SYSTEM_MODULE_ID = 0

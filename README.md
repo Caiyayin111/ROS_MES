@@ -14,8 +14,9 @@
 
 | 目录 | 说明 | 技术栈 |
 |---|---|---|
-| `ros_mes_front/` | Web 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia |
-| `ros_mes_hou/` | 业务后端 | FastAPI · SQLAlchemy · SQLite · rosbridge-websocket |
+| `mes_web/` | 前后端总目录（本团队负责） | — |
+| `mes_web/ros_mes_front/` | Web 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia |
+| `mes_web/ros_mes_hou/` | 业务后端 | FastAPI · SQLAlchemy · SQLite · rosbridge-websocket |
 | `robot_control_backend/` | ROS 机器人控制节点 | ROS · Python |
 | `deploy/` | 部署配置与说明（见 `deploy/README_DEPLOY.md`） | — |
 
@@ -26,17 +27,17 @@ Windows 本地已验证环境：标准 Python 3.12、Node.js 20。创建虚拟�
 **1. 首次准备后端环境**（项目根目录执行；已有可用虚拟环境时无需重复创建）
 
 ```powershell
-cd ros_mes_hou
+cd mes_web\ros_mes_hou
 py -3.12 -m venv venv
 .\venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-cd ..
+cd ..\..
 ```
 
 **2. 首次初始化数据库**（项目根目录执行，含种子数据；已有数据库时无需重复执行）
 
 ```powershell
-.\ros_mes_hou\venv\Scripts\python.exe .\sqlite_create.py
+.\mes_web\ros_mes_hou\venv\Scripts\python.exe .\mes_web\ros_mes_hou\sqlite_create.py
 ```
 
 后端启动时会创建缺失的表，初始数据由 `sqlite_create.py` 插入。
@@ -44,7 +45,7 @@ cd ..
 **3. 日常启动后端**（终端一，端口 8000）
 
 ```powershell
-cd ros_mes_hou
+cd mes_web\ros_mes_hou
 .\venv\Scripts\Activate.ps1
 python -m uvicorn app.main:app --reload --port 8000
 ```
@@ -52,7 +53,7 @@ python -m uvicorn app.main:app --reload --port 8000
 **4. 日常启动前端**（终端二，从项目根目录执行；端口 5173，`/api` 自动代理到 127.0.0.1:8000）
 
 ```bash
-cd ros_mes_front
+cd mes_web/ros_mes_front
 npm install                   # 首次安装或依赖变更后执行
 npm run dev
 ```
@@ -75,6 +76,6 @@ npm run dev
 
 本仓库由团队共同维护，按模块分工协作：
 
-- **前后端开发**：负责 `ros_mes_front/` 与 `ros_mes_hou/` 的页面交互、业务接口、数据库及与 ROS 的通信对接。
+- **前后端开发**：负责 `mes_web/ros_mes_front/` 与 `mes_web/ros_mes_hou/` 的页面交互、业务接口、数据库及与 ROS 的通信对接。
 - **机器人控制开发**：负责 `robot_control_backend/` 的 ROS 节点、机械臂控制、CAN 通信与消息定义。
 - **联调与接口约定**：前后端与 ROS 端通过 `docs/ROS_MES_前后端接口字段文档.md` 中记录的话题与消息进行对接；涉及话题、消息字段或交互流程的变更，由相关模块负责人协同确认并同步更新文档。

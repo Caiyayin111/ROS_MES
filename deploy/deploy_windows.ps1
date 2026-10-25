@@ -16,8 +16,8 @@ Write-Host ""
 
 # ---- 项目根目录 ----
 $PROJECT_ROOT = Split-Path -Parent $PSScriptRoot
-$FRONT_DIR = Join-Path $PROJECT_ROOT "ROS_MES\ros_mes_front"
-$BACK_DIR = Join-Path $PROJECT_ROOT "ROS_MES\ros_mes_hou"
+$FRONT_DIR = Join-Path $PROJECT_ROOT "ROS_MES\mes_web\ros_mes_front"
+$BACK_DIR = Join-Path $PROJECT_ROOT "ROS_MES\mes_web\ros_mes_hou"
 $DEPLOY_DIR = $PSScriptRoot
 $CONFIG_DIR = Join-Path $DEPLOY_DIR "config"
 
@@ -57,7 +57,7 @@ $backendEnvSrc = Join-Path $CONFIG_DIR "backend.env"
 $backendEnvDst = Join-Path $BACK_DIR ".env"
 if (Test-Path $backendEnvSrc) {
     Copy-Item $backendEnvSrc $backendEnvDst -Force
-    Write-Host "  ✓ 后端配置已复制: ros_mes_hou/.env" -ForegroundColor Green
+    Write-Host "  ✓ 后端配置已复制: mes_web/ros_mes_hou/.env" -ForegroundColor Green
 } else {
     Write-Host "  ⚠ 后端配置文件不存在: $backendEnvSrc" -ForegroundColor Yellow
 }
@@ -67,7 +67,7 @@ $frontendEnvSrc = Join-Path $CONFIG_DIR "frontend.env"
 $frontendEnvDst = Join-Path $FRONT_DIR ".env.development"
 if (Test-Path $frontendEnvSrc) {
     Copy-Item $frontendEnvSrc $frontendEnvDst -Force
-    Write-Host "  ✓ 前端配置已复制: ros_mes_front/.env.development" -ForegroundColor Green
+    Write-Host "  ✓ 前端配置已复制: mes_web/ros_mes_front/.env.development" -ForegroundColor Green
 } else {
     Write-Host "  ⚠ 前端配置文件不存在: $frontendEnvSrc" -ForegroundColor Yellow
 }
@@ -77,7 +77,7 @@ Write-Host ""
 # ---- 3. 初始化数据库 ----
 Write-Host "[3/6] 初始化数据库..." -ForegroundColor Green
 
-$dbScript = Join-Path $PROJECT_ROOT "ROS_MES\sqlite_create.py"
+$dbScript = Join-Path $PROJECT_ROOT "ROS_MES\mes_web\ros_mes_hou\sqlite_create.py"
 $dbFile = Join-Path $PROJECT_ROOT "ROS_MES\ros_database.db"
 
 if (Test-Path $dbScript) {
@@ -150,13 +150,13 @@ Write-Host "  启动方式：" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  【后端】" -ForegroundColor Yellow
-Write-Host "    cd ROS_MES\ros_mes_hou"
+Write-Host "    cd ROS_MES\mes_web\ros_mes_hou"
 Write-Host "    .\venv\Scripts\activate"
 Write-Host "    uvicorn app.main:app --reload"
 Write-Host "    访问: http://127.0.0.1:8000/docs"
 Write-Host ""
 Write-Host "  【前端】" -ForegroundColor Yellow
-Write-Host "    cd ROS_MES\ros_mes_front"
+Write-Host "    cd ROS_MES\mes_web\ros_mes_front"
 Write-Host "    npm run dev"
 Write-Host "    访问: http://127.0.0.1:5173"
 Write-Host ""

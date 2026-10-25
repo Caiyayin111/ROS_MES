@@ -2,7 +2,7 @@
 
 > 参照《ROS 话题命名规范》（第一段前缀定方向：`control`=下发、`hardware`=回传；第二段按数据语义命名）的思路，为前后端制定同等风格的命名规范。
 >
-> - 适用范围：`ros_mes_hou/`（FastAPI 后端）、`ros_mes_front/`（Vue3 + TS 前端）
+> - 适用范围：`mes_web/ros_mes_hou/`（FastAPI 后端）、`mes_web/ros_mes_front/`（Vue3 + TS 前端）
 > - 原则：**既有代码保持兼容、不强制重命名；新代码一律按本规范执行**，与现状的冲突记录在第 5 节
 > - 制定日期：2026-10-05，事例均取自当前代码（v1.1）
 

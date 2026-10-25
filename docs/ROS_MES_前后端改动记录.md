@@ -11,6 +11,15 @@
 
 ---
 
+## 2026-10-25（一）
+
+- 仓库结构调整：前后端归入 `mes_web/`（已完成，全套 27 passed 全绿）
+  - `ros_mes_front/`、`ros_mes_hou/` 整目录移入 `mes_web/`，与 `robot_control_backend/`（队友侧，未动）平级；`sqlite_create.py` 移入 `mes_web/ros_mes_hou/`；`ros_database.db` 仍在仓库根（本地文件，git 忽略）
+  - 路径逻辑收敛到 `mes_web/ros_mes_hou/app/core/config.py`：新增 `BACKEND_ROOT` / `PROJECT_ROOT`（向上自动查找含 `robot_control_backend` 或 `.git` 的目录，可用环境变量 `PROJECT_ROOT` 覆盖）/ `ROS_SCRIPTS_DIR`（可用环境变量覆盖）；`ros_control.py`、`coordination.py`、`sqlite_create.py` 原先各自向上数层级拼路径的代码统一改为读配置
+  - README / deploy 三份文件 / 接口字段文档 / 命名规范中的路径同步更新；`.gitignore` 增加 `.zcode/`
+  - `???` 提醒：队友 pull 后需重新 `cd mes_web\ros_mes_hou` 激活 venv；deploy_windows.ps1 的路径约定是"仓库文件夹的上一级 + 显式 `ROS_MES\` 前缀"，未改变
+- ROS1/ROS2 适配层拆分（进行中，见下一条）
+
 ## 2026-10-05（七）
 
 - 文档目录整理（已完成）

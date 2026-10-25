@@ -2,7 +2,7 @@
 
 > **基准**：以《ROS_MES_前后端ROS接口清单》（2026-10-05，团队基准文档）的章节结构与内容为准；本文档在其基础上逐项对照 v1.1 代码（commit `b03b57a`）核对修正，并在末尾补充基准未覆盖的**业务管理接口、数据库表字段与认证矩阵**。
 >
-> - 范围：`ros_mes_hou/`（FastAPI 后端）+ `ros_mes_front/`（Vue3 前端）；`robot_control_backend/` 的 msg 定义由队友维护，此处仅作对接参照
+> - 范围：`mes_web/ros_mes_hou/`（FastAPI 后端）+ `mes_web/ros_mes_front/`（Vue3 前端）；`robot_control_backend/` 的 msg 定义由队友维护，此处仅作对接参照
 > - 与基准的三处核对修正见 [8.9 与基准文档的差异核对](#89-与基准文档的差异核对)
 > - 字段名均与代码一致
 

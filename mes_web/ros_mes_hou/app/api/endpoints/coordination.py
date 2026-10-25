@@ -7,6 +7,7 @@ from urllib.request import Request, urlopen
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db import models
 from app.db.database import get_db
 from app.services.rosbridge_gateway import (
@@ -19,8 +20,8 @@ router = APIRouter()
 
 POINTCLOUD_VIEW_BASE_URL = os.getenv("POINTCLOUD_VIEW_BASE_URL", "http://localhost:5000")
 POINTCLOUD_VIEW_NAMES = {"top", "front", "side"}
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-ROS_SCRIPT_DIR = os.path.join(PROJECT_ROOT, "robot_control_backend", "scripts")
+# ROS 端脚本目录统一收敛到 app/core/config.py（ROS_SCRIPTS_DIR，可用环境变量覆盖）
+ROS_SCRIPT_DIR = settings.ROS_SCRIPTS_DIR
 
 
 def build_pointcloud_view_urls() -> dict:

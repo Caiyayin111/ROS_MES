@@ -67,23 +67,23 @@ cd 项目路径\deploy
 
 ```powershell
 # 复制后端配置
-copy deploy\config\backend.env ROS_MES\ros_mes_hou\.env
+copy deploy\config\backend.env ROS_MES\mes_web\ros_mes_hou\.env
 
 # 复制前端配置
-copy deploy\config\frontend.env ROS_MES\ros_mes_front\.env.development
+copy deploy\config\frontend.env ROS_MES\mes_web\ros_mes_front\.env.development
 ```
 
 #### 2. 初始化数据库
 
 ```powershell
-cd ROS_MES
+cd ROS_MES\mes_web\ros_mes_hou
 python sqlite_create.py
 ```
 
 #### 3. 后端安装
 
 ```powershell
-cd ROS_MES\ros_mes_hou
+cd ROS_MES\mes_web\ros_mes_hou
 
 # 创建虚拟环境
 python -m venv venv
@@ -98,7 +98,7 @@ pip install -r requirements.txt
 #### 4. 前端安装
 
 ```powershell
-cd ROS_MES\ros_mes_front
+cd ROS_MES\mes_web\ros_mes_front
 npm install
 ```
 
@@ -106,13 +106,13 @@ npm install
 
 ```powershell
 # 终端 1：启动后端
-cd ROS_MES\ros_mes_hou
+cd ROS_MES\mes_web\ros_mes_hou
 .\venv\Scripts\activate
 uvicorn app.main:app --reload
 # 访问 http://127.0.0.1:8000/docs 查看 API 文档
 
 # 终端 2：启动前端
-cd ROS_MES\ros_mes_front
+cd ROS_MES\mes_web\ros_mes_front
 npm run dev
 # 访问 http://127.0.0.1:5173
 ```
@@ -225,12 +225,12 @@ roslaunch robot_control_backend ros_robot.launch
 
 假设 ROS 运行在 Ubuntu 机器（IP: 192.168.1.100），前端后端运行在 Windows 机器（IP: 192.168.1.200）：
 
-1. **修改后端配置** (`ros_mes_hou/.env`)：
+1. **修改后端配置** (`mes_web/ros_mes_hou/.env`)：
 ```
 ROSBRIDGE_URL=ws://192.168.1.100:9010
 ```
 
-2. **修改前端配置** (`ros_mes_front/.env.development`)：
+2. **修改前端配置** (`mes_web/ros_mes_front/.env.development`)：
 ```
 VITE_API_TARGET=http://192.168.1.200:8000
 VITE_DEBUG_NO_ROS=false
@@ -255,7 +255,7 @@ VITE_DEBUG_NO_ROS=false
 ### 前端构建
 
 ```bash
-cd ros_mes_front
+cd mes_web/ros_mes_front
 npm run build
 # 产物在 dist/ 目录
 ```
@@ -267,7 +267,7 @@ npm run build
 使用 `uvicorn` 或 `gunicorn` 生产模式运行：
 
 ```bash
-cd ros_mes_hou
+cd mes_web/ros_mes_hou
 .\venv\Scripts\activate
 
 # 单进程
@@ -313,7 +313,7 @@ server {
 
 A: 确保已激活虚拟环境并安装了依赖：
 ```powershell
-cd ros_mes_hou
+cd mes_web\ros_mes_hou
 .\venv\Scripts\activate
 pip install -r requirements.txt
 ```
