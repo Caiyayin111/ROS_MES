@@ -18,7 +18,10 @@
   - 旧路径 `rosbridge_gateway.py` 的远端改动（两路新话题）已移植进 `app/ros/`（profile 话题表 + normalizer 分支 + 反馈流订阅列表）
   - **模块确认契约变更（前端需配合）**：ROS 端 V2.1 要求 `position=[100, station]`，station=工位号 1~15，模块号=SEG=工位-1；后端默认 `station = module_id + 1`（module_id 须在 0~14），前端可在 `/module/` 请求体显式传 `station` 覆盖；`module_id=18` 这类越界值现在构造期就报 422。**前端 ModuleManagement 若下发 x*16+y 的大模块号会被拒，需和 ROS 端对齐模块号→工位映射**（`???` 待确认：前端 x*16+y 编码与 SEG 0~14 的对应关系）
   - 好消息：改动记录 2026-10-25（一）里的协议不一致①（失败码 -1 vs 1）**ROS 端已在 V2.1 修复**（`RESULT_FAILED = 1`）；不一致②（图纸话题 `/control` 前缀）仍未解决
-- PR 评审（进行中，见下一条）
+- PR 评审与合并（已完成，合并后全套 43 passed 全绿）
+  - **PR #4**（fulan0721：急停地址配置化 + 测试去盘符依赖）→ **已合并**（本地 merge 解决冲突后推送，GitHub 自动标记 merged，队友署名保留）：急停地址修复已被适配层等价实现（保持旧文件删除）；3 个急停新用例移植到 `RosbridgeClient`；`tools/verify_emergency_stop_config.py` 移入 `mes_web/ros_mes_hou/tools/` 并改用适配层接口；`test_coordination_payload` 去盘符改动自动应用、路径按新布局修正为向上 3 级
+  - **PR #6**（czyhelp：ROS2 消息通道原型）→ **暂不合并**，已留评审意见：文件放错位置（根目录 vs `robot_control_backend/scripts/` 与 `mes_web/ros_mes_front/`）、个人 ZeroTier IP 硬编码、需基于最新 main（mes_web 重构 + V2.1 握手协议）重做；已向其说明 ROS2 接入后端侧已就绪（`ROS_VERSION=2` 切换即可）
+  - 合并远端 main 时发现 ROS 端 V2.1 更新（见上一条），PR 评审基于新结构完成
 
 ## 2026-10-25（一）
 
