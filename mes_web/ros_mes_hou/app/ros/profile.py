@@ -6,7 +6,7 @@
 
 - 消息类型串格式：ROS1 为 `robot_control_backend/RotationCmd`，ROS2 为 `robot_control_backend/msg/RotationCmd`
 - header.stamp 字段名：ROS1 为 `secs/nsecs`，ROS2 为 `sec/nanosec`
-- 是否存在 rospy 原生节点通道（/web_cmd、/robot_status，仅 ROS1 有）
+- rospy 原生节点（仅 ROS1 保留为历史兼容；测试页通道已统一走 rosbridge，两版行为一致）
 
 切换方式：环境变量 `ROS_VERSION`（支持 1/ros1/2/ros2，默认 1）。
 话题名默认与 ROS1 现网一致；ROS 端调整话题时优先用环境变量

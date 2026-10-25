@@ -738,7 +738,7 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 | 自定义消息类型串 | `robot_control_backend/RotationCmd` | `robot_control_backend/msg/RotationCmd` |
 | std_msgs 类型串 | `std_msgs/String` | `std_msgs/msg/String` |
 | `header.stamp` 字段名 | `secs` / `nsecs` | `sec` / `nanosec` |
-| 测试通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | rospy 直连 | **rosbridge 等价实现（2026-10-25 已完成）**：行为一致，ROS 端无需额外提供 |
+| 测试通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | **两版一致**：2026-10-25 起统一经 rosbridge，rospy 直连保留为 ROS1 历史兼容 | 同左 |
 | 话题名 | 见第 4 节 | 同 ROS1；ROS 端若改名，用环境变量 `ROS_TOPIC_<键名>` 覆盖或改 `profile.py` 默认值 |
 
 - ROS1 / ROS2 的适配器分别为 `app/ros/ros1/Ros1Dispatcher`、`app/ros/ros2/Ros2Dispatcher`，共用 `app/ros/rosbridge.py` 传输层；本文档第 4、5 节记录的话题与消息格式即 ROS1 现网契约，ROS2 端移植定稿后由 ROS 端同步确认差异表。

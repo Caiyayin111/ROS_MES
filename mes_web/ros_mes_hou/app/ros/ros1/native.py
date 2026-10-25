@@ -1,8 +1,10 @@
 # app/ros/ros1/native.py
 """ROS1 原生节点通道（原 app/services/ros_service.py，rospy 直连）。
 
-这是第一代测试用的直连通道（/web_cmd 下发、/robot_status 订阅），
-V2 业务流已全部走 rosbridge；rospy 不可用时静默禁用，不影响 HTTP 服务。
+这是第一代测试用的直连通道（/web_cmd 下发、/robot_status 订阅）。
+2026-10-25 起测试页通道已统一走 rosbridge（见 app/ros/rosbridge.py），
+本模块保留为历史兼容，仅随 start_native_node 附带启动；
+rospy 不可用时静默禁用，不影响 HTTP 服务与其他功能。
 """
 import json
 import threading

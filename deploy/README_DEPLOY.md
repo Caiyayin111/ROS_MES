@@ -36,7 +36,9 @@ ROS MES 由三部分组成，部署方式各有不同：
 - **Node.js** 18.0 或更高版本
   - 下载：https://nodejs.org/
   - 验证：`node --version`
-- **Python** 3.8 ~ 3.12
+- **Python** 3.10 ~ 3.12（**必须 ≥3.10**：后端锁版的 fastapi/uvicorn 不支持 3.8）
+  - Ubuntu 24.04（ROS2 机器）：系统 Python 3.12 直接可用
+  - Ubuntu 20.04（ROS1/Noetic 机器）：系统 Python 3.8 **不可用**，用 Miniconda 或 deadsnakes 建独立 3.10+ 环境，**勿动系统 Python**（Noetic 依赖它）
   - 下载：https://www.python.org/downloads/
   - 验证：`python --version`
   - 安装时勾选 "Add Python to PATH"

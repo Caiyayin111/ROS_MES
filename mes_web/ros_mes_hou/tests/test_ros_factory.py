@@ -5,9 +5,10 @@ from unittest.mock import Mock, patch
 
 from app.ros import get_ros_dispatcher, reset_ros_dispatcher
 from app.ros.base import RosDispatchError
-from app.ros.profile import ROS2_PROFILE
+from app.ros.profile import ROS1_PROFILE, ROS2_PROFILE
 from app.ros.ros1 import Ros1Dispatcher
-from app.ros.ros2 import Ros2Dispatcher, _RosbridgeStatusWatcher
+from app.ros.ros2 import Ros2Dispatcher
+from app.ros.rosbridge import _RosbridgeStatusWatcher
 
 
 class RosDispatcherFactoryTest(unittest.TestCase):
@@ -59,6 +60,29 @@ class RosDispatcherFactoryTest(unittest.TestCase):
                 json.loads(publish["msg"]["data"]),
                 {"command": "send_ros", "payload": {"msg": "hello"}},
             )
+
+    def test_ros1_adapter_also_publishes_web_cmd_via_rosbridge(self):
+        # 测试页通道统一走 rosbridge：干净 venv（无 rospy）下 ROS1 模式同样可用
+        with patch.dict(os.environ, {"ROS_VERSION": "1"}):
+            dispatcher = get_ros_dispatcher()
+            sent = []
+
+            class FakeWebSocket:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *args):
+                    return False
+
+                async def send(self, message):
+                    sent.append(message)
+
+            with patch("app.ros.rosbridge.websockets") as websockets_mock:
+                websockets_mock.connect = Mock(return_value=FakeWebSocket())
+                result = dispatcher.publish_web_cmd("send_ros", {"msg": "hello"})
+
+            self.assertEqual(result["topic"], "/web_cmd")
+            self.assertEqual(json.loads(sent[0])["type"], "std_msgs/String")
 
     def test_ros2_adapter_status_defaults_to_unknown_until_connected(self):
         with patch.dict(os.environ, {"ROS_VERSION": "2"}):

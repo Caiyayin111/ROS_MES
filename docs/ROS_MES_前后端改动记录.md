@@ -11,6 +11,15 @@
 
 ---
 
+## 2026-10-25（七）
+
+- 测试页通道统一走 rosbridge（ROS1/ROS2 行为一致）+ 同机部署 Python 指南（已完成，**51 passed 全绿**，双模式端到端冒烟通过）
+  - 起因：ROS 端负责人将把前后端部署到 ROS 机器上同机自测（不走虚拟网络），而后端锁版依赖要求 Python ≥3.10，干净 venv 里没有 rospy——ROS1 模式的测试页 `send_ros` 原走 rospy 会 503
+  - 修正：`_RosbridgeStatusWatcher` 迁入共用层，`/ros/**` 测试通道在 **ROS1/ROS2 两版统一经 rosbridge**（publish_web_cmd + /robot_status 状态订阅），rospy 原生通道降级为 ROS1 历史兼容（随 start_native_node 附带启动）；两份差异表同步更新（测试通道不再是差异项）
+  - 冒烟：ROS1 模式（无 rospy 的 venv）send_ros 200 且 bridge 收到 /web_cmd、状态 ros_ready=true；ROS2 模式同通过
+  - **同机部署 Python 指南**（已写入 deploy/README_DEPLOY.md）：Ubuntu 24.04（ROS2 机器）系统 Python 3.12 直接可用；Ubuntu 20.04（ROS1 机器）系统 Python 3.8 **不可用**，用 Miniconda/deadsnakes 建独立 3.10+ 环境，勿动系统 Python（Noetic 依赖）
+  - 前端：RosTestPage 补工位号输入（station 必传契约的测试页落地），build 通过
+
 ## 2026-10-25（六）
 
 - ROS2 测试页通道完成 + 前后端 ROS2 适配全面收口（已完成，**50 passed 全绿**，前端 build 通过，端到端冒烟通过）
