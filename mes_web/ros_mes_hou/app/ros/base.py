@@ -59,7 +59,11 @@ class RosDispatcher(ABC):
 
     # ---- 原生节点通道（ROS1 专属，默认不可用） ----
     def start_native_node(self) -> None:
-        """启动原生 ROS 节点线程；无原生通道的适配器默认不启动。"""
+        """启动后台通道（rospy 线程 / rosbridge 状态订阅）；无后台通道的适配器默认不启动。"""
+        return None
+
+    def stop(self) -> None:
+        """结束后台连接（应用关闭时调用）；无后台通道的适配器默认无操作。"""
         return None
 
     def publish_web_cmd(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:

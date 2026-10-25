@@ -360,6 +360,7 @@ A:
 | ROSBRIDGE_URL | rosbridge WebSocket 地址 | ws://127.0.0.1:9010 |
 | ROS_VERSION | ROS 版本适配（1/ros1 或 2/ros2） | 1 |
 | ROS_MODULE_CONFIRM_ACK_WAIT_S | 模块确认回执等待上限（秒，须 ≥35） | 35 |
+| POINTCLOUD_VIEW_BASE_URL | 点云三视图服务（data_process_node 的 Flask） | http://127.0.0.1:5000 |
 | SECRET_KEY | JWT 密钥（务必修改） | 占位字符串 |
 | ACCESS_TOKEN_EXPIRE_MINUTES | Token 过期时间（分钟） | 1440 |
 | HOST | 监听地址 | 0.0.0.0 |

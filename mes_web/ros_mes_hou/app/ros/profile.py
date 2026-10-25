@@ -42,6 +42,9 @@ TOPIC_DEFAULTS: Dict[str, str] = {
     "module_confirm_failed": "/hardware/web_module_cmd",
     "softstop": "/control/softstop",
     "softstop_release": "/control/softstop_release",
+    # 测试通道（/ros/** 接口）：ROS1 走 rospy、ROS2 走 rosbridge，话题契约一致
+    "web_cmd": "/web_cmd",
+    "robot_status": "/robot_status",
 }
 
 

@@ -160,7 +160,7 @@ rospy 直发 `/web_cmd` 的旧路径已迁移为 `app/ros/ros1/native.py`（ROS1
 | 自定义消息类型串 | `robot_control_backend/IntCmd` | `robot_control_backend/msg/IntCmd` |
 | std_msgs 类型串 | `std_msgs/String` | `std_msgs/msg/String` |
 | `header.stamp` 字段名 | `secs` / `nsecs` | `sec` / `nanosec` |
-| rospy 原生通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | 有 | 无（`/ros/**` 返回 503，ROS 端提供后补充） |
+| 测试通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | rospy 直连 | **rosbridge 等价实现（2026-10-25 已完成并冒烟通过）**：后台订阅 /robot_status + 发布 /web_cmd，行为与 ROS1 一致，ROS 端无需额外提供 |
 | 构建与启动 | catkin_make + roslaunch（Noetic） | colcon + ros2 launch（待 ROS 端移植） |
 
 **对 ROS 端 ROS2 移植的要求**：话题名、消息字段、device_id 编码、模块确认握手语义保持与本文档一致（即与 ROS1 现网一致）；若必须调整，先改本文档并同步前后端，再动代码。移植出可跑分支后，后端切 `ROS_VERSION=2` 联调一次即可验证 `profile.py` 中的 ROS2 预设。

@@ -11,6 +11,15 @@
 
 ---
 
+## 2026-10-25（六）
+
+- ROS2 测试页通道完成 + 前后端 ROS2 适配全面收口（已完成，**50 passed 全绿**，前端 build 通过，端到端冒烟通过）
+  - **新增**：ROS2 适配器补齐测试通道（原任务收窄项）——`/api/ros/send_ros` 在 `ROS_VERSION=2` 下经 rosbridge 发布 `/web_cmd`（std_msgs/String JSON，与 ROS1 rospy 同契约）；`/api/ros/get_ros_status` 由后台常驻线程订阅 `/robot_status` 维护（断线 5s 自动重连，`test_data=true` 标记测试数据，无数据显示 unknown）；`main.py` 增加 shutdown 钩子结束后台连接；rosbridge 不可达时发送接口返回 503（ros.py 同时捕获 RosbridgeError）
+  - **前端**：ModuleManagement 增加"工位号"选择（1~15，station 必传契约的 UI 落地），payload 随 `/module/` 下发
+  - **端到端冒烟**（本机假 rosbridge，ROS_VERSION=2）：send_ros 200 且 bridge 收到 /web_cmd advertise+publish；连接中 get_ros_status 返回 `ros_ready=true` + 推送状态；杀掉 bridge 后 7s 内 `ros_ready=false`。三种场景全部符合"ROS 测试页接 ROS2"任务验收标准
+  - **ROS2 适配就绪清单**：类型串 `pkg/msg/X`、stamp `sec/nanosec`、8 路反馈话题、模块确认握手（station）、急停/解除、测试页通道——全部走 `ROS_VERSION=2` 一键切换，前端除三轴编码外零改动
+  - 挂起项不变：MM_PER_REV（等下位机）、大屏 robot_status 数据流（web_data_node 在 ROS 端 launch 中被注释）
+
 ## 2026-10-25（五）
 
 - 与 ROS 端负责人确认最后两个待决项（沟通完成，结论已写入三轴版清单）

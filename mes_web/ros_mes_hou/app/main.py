@@ -42,5 +42,11 @@ app.mount("/api/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 @app.on_event("startup")
 def on_startup():
     models.Base.metadata.create_all(bind=engine)
-    # ROS1 适配器会在此启动 rospy 原生节点线程；ROS2 适配器为 no-op
+    # ROS1 适配器启动 rospy 原生节点线程；ROS2 适配器启动 /robot_status 后台订阅
     get_ros_dispatcher().start_native_node()
+
+
+@app.on_event("shutdown")
+def on_shutdown():
+    # 结束后台 ROS 连接（ROS1 的 rospy 线程为 daemon 随进程退出；ROS2 订阅线程由此停止）
+    get_ros_dispatcher().stop()

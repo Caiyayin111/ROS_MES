@@ -335,6 +335,51 @@ class RosbridgeClient:
             print(f"[紧急故障] 急停解除系统异常: {exc}")
             return False
 
+    async def publish_web_cmd(self, command: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """测试通道：向 /web_cmd 发布 JSON 指令（std_msgs/String）。
+
+        与 ROS1 rospy 原生通道（app/ros/ros1/native.py）同一消息契约：
+        data = JSON {"command": ..., "payload": ...}。
+        """
+        if websockets is None:
+            raise RosbridgeError("missing websockets dependency")
+
+        topic = self.profile.topics["web_cmd"]
+        advertise_json = json.dumps(
+            {
+                "op": "advertise",
+                "topic": topic,
+                "type": self.profile.std_message_type("String"),
+            },
+            ensure_ascii=False,
+        )
+        publish_json = json.dumps(
+            {
+                "op": "publish",
+                "topic": topic,
+                "msg": {
+                    "data": json.dumps(
+                        {"command": command, "payload": payload}, ensure_ascii=False
+                    )
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        try:
+            async with websockets.connect(self.url, close_timeout=1, open_timeout=3) as ws:
+                await asyncio.wait_for(ws.send(advertise_json), self.timeout)
+                await asyncio.sleep(0.1)
+                await asyncio.wait_for(ws.send(publish_json), self.timeout)
+        except ConnectionRefusedError as exc:
+            raise RosbridgeError(f"unable to connect to rosbridge: {self.url}") from exc
+        except asyncio.TimeoutError as exc:
+            raise RosbridgeError(f"rosbridge timeout while publishing web_cmd: {self.url}") from exc
+        except Exception as exc:
+            raise RosbridgeError(f"rosbridge web_cmd publish failed: {exc}. URL: {self.url}") from exc
+
+        return {"topic": topic, "command": command, "payload": payload, "mode": "rosbridge"}
+
     async def stream_feedback(self) -> AsyncIterator[Dict[str, Any]]:
         if websockets is None:
             yield {"data_type": "error", "message": "missing websockets dependency"}

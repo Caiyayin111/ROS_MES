@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 
 from app.ros import get_ros_dispatcher
-from app.ros.base import RosDispatchError
+from app.ros.base import RosbridgeError, RosDispatchError
 
 router = APIRouter()
 
@@ -17,7 +17,8 @@ def send_ros(msg: str):
                 "msg": msg,
             },
         )
-    except RosDispatchError as exc:
+    except (RosDispatchError, RosbridgeError) as exc:
+        # 契约：rosbridge/原生通道不可用时返回 503，前端据此提示"未连接"
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return {

@@ -27,6 +27,16 @@
               @input="handleYChange(inputY)"
             />
           </div>
+          <div class="input-group">
+            <span class="prefix">工位号</span>
+            <el-input-number
+              v-model="station"
+              class="binary-input station-input"
+              :min="1"
+              :max="15"
+              controls-position="right"
+            />
+          </div>
           <el-button type="primary" class="lock-btn" @click="handleLockAndJump"
             >锁定并下发</el-button
           >
@@ -35,7 +45,7 @@
           系统锁定目标: X(十进制
           <span class="highlight">{{ selectedCell.x }}</span
           >) - Y(十进制 <span class="highlight">{{ selectedCell.y }}</span
-          >)
+          >)；工位号 = 本次确认上电的组号（1~15），需与操作员实际给电的组一致
         </div>
       </div>
 
@@ -88,6 +98,8 @@ for (let y = 1; y <= matrixSize; y++) {
 // 1. 输入框绑定值
 const inputX = ref(1);
 const inputY = ref(1);
+// V2.1 模块确认握手：station=工位号 1~15（操作员本次给目标组上电的组号），后端必传
+const station = ref(1);
 
 // 2. 当前选中的格子
 const selectedCell = ref({ x: 1, y: 1 });
@@ -169,6 +181,11 @@ const handleLockAndJump = async () => {
     return;
   }
 
+  if (!station.value || station.value < 1 || station.value > 15) {
+    ElMessage.warning("请选择 1-15 范围内的工位号（与操作员上电的组号一致）");
+    return;
+  }
+
   let deviceId = 0;
   try {
     const deviceRes: any = await getDeviceListApi();
@@ -196,6 +213,7 @@ const handleLockAndJump = async () => {
     module_id,
     device_id: deviceId,
     position: 0,
+    station: station.value,
   };
 
   console.log("模块下发提交数据：", payload);
