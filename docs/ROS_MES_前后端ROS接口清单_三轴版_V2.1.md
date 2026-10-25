@@ -147,3 +147,19 @@ ROS 侧系统级指令走 `/arm/cmd_vel`（device_id=0，position=[1]急停/[4]�
 ### 🟢 7.8 旧路径残留（**已解决**）
 
 rospy 直发 `/web_cmd` 的旧路径已迁移为 `app/ros/ros1/native.py`（ROS1 适配器专属通道，ROS2 适配器无此通道），与 rosbridge 网关各司其职。
+
+---
+
+## 8. ROS1 / ROS2 差异速查表
+
+> 本文其余部分（话题、消息、device_id 编码、握手语义）是**版本无关的契约**，ROS1 与 ROS2 下应完全一致；两个版本的差异只有下表几项，代码层面的唯一真相是 `mes_web/ros_mes_hou/app/ros/profile.py`。后端切换用环境变量 `ROS_VERSION=1|2`（见 `deploy/config/backend.env`），业务接口不感知版本。
+
+| 差异项 | ROS1（现网） | ROS2（预设，待移植定稿核对） |
+|---|---|---|
+| 自定义消息类型串 | `robot_control_backend/IntCmd` | `robot_control_backend/msg/IntCmd` |
+| std_msgs 类型串 | `std_msgs/String` | `std_msgs/msg/String` |
+| `header.stamp` 字段名 | `secs` / `nsecs` | `sec` / `nanosec` |
+| rospy 原生通道（`/web_cmd`、`/robot_status`，`/ros/**` 接口） | 有 | 无（`/ros/**` 返回 503，ROS 端提供后补充） |
+| 构建与启动 | catkin_make + roslaunch（Noetic） | colcon + ros2 launch（待 ROS 端移植） |
+
+**对 ROS 端 ROS2 移植的要求**：话题名、消息字段、device_id 编码、模块确认握手语义保持与本文档一致（即与 ROS1 现网一致）；若必须调整，先改本文档并同步前后端，再动代码。移植出可跑分支后，后端切 `ROS_VERSION=2` 联调一次即可验证 `profile.py` 中的 ROS2 预设。
