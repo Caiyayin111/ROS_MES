@@ -11,6 +11,14 @@
 
 ---
 
+## 2026-10-25（八）
+
+- 伸缩轴单位契约定稿：**话题边界两向均为 mm，后端零换算**（51 passed 全绿）
+  - 经过：ROS 端负责人先口头说"单位 0.01mm"，我方一度按"话题线上 0.01mm"实现（下发 ×100 / 反馈 position_mm）；随后 ROS 端推送 3ed42f3《更新伸缩杆执行层逻辑》，核实 `TelescopicCmd.msg` 注释与节点源码后确认：**0.01mm 是 CAN/下位机层字段单位，ROS 节点内部完成换算，话题边界（下发 /control/adjust_telescopic_cmd、反馈 /hardware/telescope_feedback）两向均为 mm**
+  - 结论：与前后端既有语义（伸缩 mm）天然一致，撤销我方 ×100 / position_mm 预实现；**MM_PER_REV 参数废弃**（ROS 节点不再做 mm↔角度换算）；前端 FineTuningPage 的 position_mm 优先逻辑保留为无害兼容（字段暂无则回退 position）
+  - ROS 端同步变化：telescopic_node 增加基准保护（首帧反馈到达前拒绝增量累加）；0~30mm 软限位节点侧执行；超位回执 CmdAck（后端已订阅转发）
+  - 交接：伸缩下发/显示今晚联调直接按 mm，无需任何换算
+
 ## 2026-10-25（七）
 
 - 测试页通道统一走 rosbridge（ROS1/ROS2 行为一致）+ 同机部署 Python 指南（已完成，**51 passed 全绿**，双模式端到端冒烟通过）

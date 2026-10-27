@@ -365,7 +365,14 @@ const applyFeedback = (feedback: any) => {
     return;
   }
 
-  const position = Number(feedback.position);
+  // V2.1 伸缩轴契约：ROS 回传 0.01mm，后端归一化时附加 position_mm（毫米），
+  // 伸缩轴显示优先取毫米值；旋转/摆动仍为度，直接用 position
+  const rawPosition = Number(feedback.position);
+  const positionMm = Number(feedback.position_mm);
+  const position =
+    feedback.data_type === "telescope_axis_encoder" && Number.isFinite(positionMm)
+      ? positionMm
+      : rawPosition;
   if (
     feedback.data_type === "axis_encoder" ||
     feedback.data_type === "rotation_axis_encoder" ||

@@ -46,6 +46,7 @@ class RosbridgeGatewayTest(unittest.TestCase):
                 self.assertEqual(feedback["data_type"], data_type)
                 self.assertEqual(feedback["feedback_type"], feedback_type)
 
+
     def test_normalize_pressure_feedback_keeps_frontend_feedback_shape(self):
         feedback = normalize_feedback_message(
             "/hardware/sensor_feedback",

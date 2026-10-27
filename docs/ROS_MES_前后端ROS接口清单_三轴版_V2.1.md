@@ -129,9 +129,16 @@ ROS 侧超时参数（rob_arm.env）：等宣告 `MODULE_CONFIRM_WAIT_ANNOUNCE_S
 
 `/hardware/cmd_ack` 已加入后端反馈流（`data_type=cmd_ack`，透传 `result/detail`）。前端 FineTuningPage 可按该标签提示"超位被拒绝"。
 
+<<<<<<< HEAD
 ### � 7.5 伸缩轴单位已改为距离（**已解决：实测量纲 0.01mm**）
 
 伸缩轴（电机 3）是直线位移轴，台架标定 1cm = 177847 counts（17784.7 counts/mm）。ROS 端已全链路改为距离量纲，不再使用 `MM_PER_REV` 假设（该配置已从 `rob_arm.env` 删除）：
+=======
+### 🟡 7.5 伸缩轴单位（**已定论：话题边界两向均为 mm，MM_PER_REV 废弃**）
+
+**2026-10-25 晚 ROS 端定稿并已推送（3ed42f3《更新伸缩杆执行层逻辑》）**：电机3 为直线位移轴，下位机 CAN 字段单位 0.01mm——`telescopic_node` 接收 **mm 增量**（0~30mm 软限位、首帧反馈前拒绝增量，内部 ×100 透传 CAN）、`feedback_node` 回传 **mm 实测长度**（CAN 0.01mm ÷100），`TelescopicCmd.msg` 注释同步更新。
+即：**ROS 话题边界两向均为 mm，与前后端语义天然一致——后端零换算、前端零改动**（MM_PER_REV 参数废弃；此前我方按"话题 0.01mm"做的 ×100/position_mm 预实现已撤销）。伸缩显示直接用反馈 position（mm），伸缩下发直接传 mm 增量。
+>>>>>>> 5a3642e6564df20984385ffb9d68bdad85a7b128
 
 | 环节 | 单位 |
 |---|---|
