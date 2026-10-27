@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import os
 import time
 from urllib.error import URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -18,6 +20,8 @@ router = APIRouter()
 
 POINTCLOUD_VIEW_BASE_URL = os.getenv("POINTCLOUD_VIEW_BASE_URL", "http://localhost:5000")
 POINTCLOUD_VIEW_NAMES = {"top", "front", "side"}
+# 点云视图服务通常与后端同机/内网，强制绕过 HTTP_PROXY，避免代理拖垮 2s 超时
+_VIEW_OPENER = build_opener(ProxyHandler({}))
 # ROS 端脚本目录统一收敛到 app/core/config.py（ROS_SCRIPTS_DIR，可用环境变量覆盖）
 ROS_SCRIPT_DIR = settings.ROS_SCRIPTS_DIR
 
@@ -44,7 +48,7 @@ def fetch_pointcloud_view(view_name: str) -> tuple[bytes, str]:
 
     request = Request(url, headers={"Cache-Control": "no-cache"})
     try:
-        with urlopen(request, timeout=2.0) as response:
+        with _VIEW_OPENER.open(request, timeout=2.0) as response:
             content_type = response.headers.get("Content-Type", "image/png")
             return response.read(), content_type
     except URLError as exc:

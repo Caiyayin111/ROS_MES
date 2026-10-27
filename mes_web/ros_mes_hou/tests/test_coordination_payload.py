@@ -173,12 +173,13 @@ class CoordinationPayloadTest(unittest.TestCase):
         response_mock.__enter__ = Mock(return_value=response_mock)
         response_mock.__exit__ = Mock(return_value=False)
 
-        with patch("app.api.endpoints.coordination.urlopen", return_value=response_mock) as urlopen_mock:
+        with patch("app.api.endpoints.coordination._VIEW_OPENER") as opener_mock:
+            opener_mock.open.return_value = response_mock
             response = proxy_pointcloud_view("top")
 
         self.assertEqual(response.media_type, "image/png")
         self.assertEqual(response.body, b"png-bytes")
-        urlopen_mock.assert_called_once()
+        opener_mock.open.assert_called_once()
 
 
 if __name__ == "__main__":

@@ -22,17 +22,20 @@ def send_fine_tuning(
     dispatcher=None,
 ):
     dispatcher = dispatcher or get_ros_dispatcher()
+    business_module_id = int(record.module_id or 0)
+    business_device_id = int(record.device_id or 0)
+    position = float(record.position if record.position is not None else record.new_value)
+    # 先做参数校验再落库，非法轴号/模块号不应产生脏记录
+    try:
+        payload = build_fine_tuning_publish_payload(
+            record.parameter_name, position, business_module_id, business_device_id)
+    except RosbridgeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     db_record = finetuning_crud.create_fine_tuning_record(
         db=db,
         record=record,
         creater_id=1,
     )
-    business_module_id = int(record.module_id or 0)
-    business_device_id = int(record.device_id or 0)
-    position = float(record.position if record.position is not None else db_record.new_value)
-    # V2：module_id/device_id 直接透传前端请求，网关不再写死 17/33/34/35
-    payload = build_fine_tuning_publish_payload(
-        db_record.parameter_name, position, business_module_id, business_device_id)
     payload["business"] = {
         "module_id": business_module_id,
         "device_id": business_device_id,

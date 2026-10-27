@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, AsyncIterator, Dict
 
@@ -24,8 +25,8 @@ class RosDispatchError(Exception):
 
 
 # 子进程执行 ROS 脚本用的解释器；
-# 若 venv 内无法运行 ROS 库，可改为 "/usr/bin/python3" 或具体的 conda/ros 环境路径
-PYTHON_CMD = "python"
+# Linux 环境通常没有 python 别名，默认使用当前后端解释器，可用 ROS_PYTHON_CMD 覆盖
+PYTHON_CMD = os.environ.get("ROS_PYTHON_CMD", sys.executable)
 
 
 class RosDispatcher(ABC):
