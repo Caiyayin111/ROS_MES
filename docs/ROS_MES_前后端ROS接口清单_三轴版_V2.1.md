@@ -129,14 +129,29 @@ ROS 侧超时参数（rob_arm.env）：等宣告 `MODULE_CONFIRM_WAIT_ANNOUNCE_S
 
 `/hardware/cmd_ack` 已加入后端反馈流（`data_type=cmd_ack`，透传 `result/detail`）。前端 FineTuningPage 可按该标签提示"超位被拒绝"。
 
-### 🟡 7.5 伸缩反馈单位是"度"不是"mm"（**挂起：等下位机给真实系数**）
+### � 7.5 伸缩轴单位已改为距离（**已解决：实测量纲 0.01mm**）
 
-`/hardware/telescope_feedback` 的 position 为电机转角（°）。前端若按 mm 展示会差 `MM_PER_REV/360` 倍（当前 MM_PER_REV=0.7）。
-**2026-10-25 ROS 端确认：0.7 为占位值，换算还没测完，真实系数等下位机提供。** 拿到真值后的动作：ROS 端改 `rob_arm.env` 与 `deploy/config/rob_arm.env` 两处；前端用同一系数补反馈"度→mm"显示换算。在那之前前端不做换算，伸缩反馈数值按"度"理解。
+伸缩轴（电机 3）是直线位移轴，台架标定 1cm = 177847 counts（17784.7 counts/mm）。ROS 端已全链路改为距离量纲，不再使用 `MM_PER_REV` 假设（该配置已从 `rob_arm.env` 删除）：
 
-### 🟡 7.6 反馈 module_id 是 SEG，不是业务模块号
+| 环节 | 单位 |
+|---|---|
+| `/control/adjust_telescopic_cmd`（前端下发） | mm |
+| CAN 下行 MSG=1 相对增量 | 0.01mm |
+| CAN 上行位置反馈 | 0.01mm |
+| `/hardware/telescope_feedback`（前端展示） | mm |
+
+**前端无需换算**，输入框按 `(mm)`、反馈按 mm 直接展示。前提：固件需按 0.01mm 解析伸缩轴 MSG=1（下位机侧待确认，属外部依赖，不改 ROS/前端）。
+
+### � 7.6 反馈 module_id 是 SEG，不是业务模块号（**下行已动态寻址，上行仍为 SEG**）
 
 hardware_node 上行反馈 `module_id = CAN SEG 位域`（0~14），与前端下发的业务 module_id 不同空间。当前前端按 device_id 匹配所以未暴露；任何按 module_id 关联的逻辑都会错。
+
+**下行运动帧已改为动态 SEG 路由（原 P0-3 已修）**：
+- module_confirme_node 握手成功后发布 `/control/seg_bind`（`IntCmd`，`position=[SEG]` 绑定 / `[-1]` 解绑），hardware_node 维护 `module_id → SEG` 表；
+- 运动帧（MSG=1）、单轴停止（MSG=3）、模块停（`0x08|SEG<<18`）均按该业务模块绑定的 SEG 构造，不再固定 SEG=0；
+- 未绑定（未做模块确认）时回退 `CAN_DEFAULT_SEG=0`，保证单工位可用；
+- 某工位断电重启（重新宣告未编号）时，module_confirme_node 自动解绑该模块的 SEG，避免运动帧继续发往未编号的组；
+- CAN 过滤器已去掉 SEG 位（`cls_mask=0x1FC3E000`），任意组（SEG=0~14）的反馈/事件/传感器帧都能收到。
 
 ### 🟢 7.7 急停链路（**已闭环**）
 

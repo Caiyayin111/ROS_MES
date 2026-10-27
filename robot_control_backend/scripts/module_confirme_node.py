@@ -69,6 +69,9 @@ class ModuleSessionConfirmer:
             os.environ['ROS_TOPIC_MODULE_CONFIRM_SUCCESS'], IntCmd, queue_size=10)
         self.pub_failed = rospy.Publisher(
             os.environ['ROS_TOPIC_MODULE_CONFIRM_FAILED'], IntCmd, queue_size=10)
+        # 握手成功/失效后向 hardware_node 同步 SEG 绑定，用于运动帧动态寻址
+        self.pub_seg_bind = rospy.Publisher(
+            os.environ['ROS_TOPIC_SEG_BIND'], IntCmd, queue_size=10)
         rospy.Subscriber(os.environ['ROS_TOPIC_MODULE_CMD'], IntCmd, self.cb_module_cmd)
         rospy.Subscriber(os.environ['ROS_TOPIC_UID_ANNOUNCE'], UidAnnounce, self.cb_announce)
         rospy.Subscriber(os.environ['ROS_TOPIC_SEG_CONFIRM'], SegConfirm, self.cb_confirm)
@@ -135,8 +138,10 @@ class ModuleSessionConfirmer:
             # 非握手期间收到宣告：若为已 READY 工位的 UID，说明该组断电重启，会话失效
             stale = [s for s, rec in self.session.items() if rec["uid56"] == int(msg.uid56)]
             for s in stale:
-                del self.session[s]
+                rec = self.session.pop(s)
                 rospy.logwarn("🔌 工位%d（SEG=%d）重新上电，会话已失效，需重新确认", s, s - 1)
+                # 解绑该业务模块的 SEG 路由，避免运动帧继续发往已重启（未编号）的组
+                self._publish_seg_bind(rec.get("module_id", -1), -1)
             if not stale:
                 rospy.loginfo("📢 收到未请求宣告：UID56=%X（槽%d），如需启用请下发模块确认指令",
                               msg.uid56, msg.slot)
@@ -159,6 +164,7 @@ class ModuleSessionConfirmer:
             # 三项核对通过：握手成功，登记会话表
             self.session[cur["station"]] = {
                 "uid56": cur["uid56"], "seg": cur["seg"],
+                "module_id": cur["req_module_id"],
                 "ts": rospy.Time.now().to_sec(),
             }
             station, req_mid, seg = cur["station"], cur["req_module_id"], cur["seg"]
@@ -166,6 +172,8 @@ class ModuleSessionConfirmer:
             self.state = IDLE
         self._publish_result(self.pub_success, req_mid, self.RESULT_SUCCESS,
                              "工位%d（SEG=%d）握手成功 UID56=%X" % (station, seg, msg.uid56))
+        # 通知 hardware_node：该业务模块的运动帧改用 SEG 寻址
+        self._publish_seg_bind(req_mid, seg)
 
     # ================= 超时与重试 =================
     def _check_timeout(self, _event):
@@ -219,6 +227,17 @@ class ModuleSessionConfirmer:
         self.pub_assign.publish(m)
 
     # ================= 回执（保持后端契约） =================
+    def _publish_seg_bind(self, module_id, seg):
+        """SEG 绑定通知：position=[seg] 绑定，position=[-1] 解绑（hardware_node 订阅）"""
+        if int(module_id) < 0:
+            return
+        m = IntCmd()
+        m.header = Header(stamp=rospy.Time.now())
+        m.module_id = int(module_id)
+        m.device_id = 0
+        m.position = [int(seg)]
+        self.pub_seg_bind.publish(m)
+
     def _publish_result(self, publisher, req_module_id, result_code, log_text):
         """成功/失败回执：module_id 原样返回请求值，device_id=0，position=[100|1]"""
         m = IntCmd()
