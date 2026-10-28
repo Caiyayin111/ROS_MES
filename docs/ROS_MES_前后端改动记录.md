@@ -11,6 +11,14 @@
 
 ---
 
+## 2026-10-28（SQLite 启动数据库修复）
+
+- 修复后端启动时报 `sqlite3.DatabaseError: database disk image is malformed`：仓库误跟踪的 `ros_database.db-wal`、`ros_database.db-shm` 与本地数据库主文件不一致，已移除版本控制并加入 `.gitignore`。
+- 保留并核验主数据库 `ros_database.db`，`PRAGMA integrity_check` 返回 `ok`；当前本地数据为 `Module_ID=17`、`Unit_ID=32/64/96`。
+- 修正部署模板 `DATABASE_URL`，从 `mes_web/ros_mes_hou/.env` 使用 `sqlite:///../../ros_database.db` 指向仓库根数据库。
+
+---
+
 ## 2026-10-28（模块确认协议分层调整）
 
 - 模块确认前后端业务层与 ROS 下行层分离（已完成）

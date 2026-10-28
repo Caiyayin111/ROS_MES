@@ -10,6 +10,8 @@ dist/
 # 本地数据库文件 (如果你用了 sqlite)
 *.db
 *.sqlite3
+*.db-wal
+*.db-shm
 
 # 环境变量机密文件
 .env
