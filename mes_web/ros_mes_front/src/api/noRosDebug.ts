@@ -24,15 +24,14 @@ export function getNoRosDebugDeviceList() {
 }
 
 export function getNoRosDebugUnitsByDevice(deviceId: number) {
+  const armIds = [32, 64, 96, 128, 160];
   return mockSuccess(
-    [
-      {
-        id: deviceId * 10 + 1,
-        Unit_ID: 1,
-        Device_ID: deviceId,
-        UnitDescript: "NO_ROS_DEBUG 默认机械臂",
-      },
-    ],
+    armIds.map((unitId, index) => ({
+      id: deviceId * 10 + index + 1,
+      Unit_ID: unitId,
+      Device_ID: deviceId,
+      UnitDescript: `NO_ROS_DEBUG ${index + 1}号机械臂`,
+    })),
     "NO_ROS_DEBUG: 模拟机械臂列表"
   );
 }
@@ -60,9 +59,16 @@ export function getNoRosDebugDrawingList() {
 }
 
 export function createNoRosDebugModule(data: any) {
+  const unitIds = Array.isArray(data?.unit_ids) ? data.unit_ids.map(Number) : [];
   return mockSuccess(
     {
       ...data,
+      confirmations: unitIds.map((unitId: number) => ({
+        unit_id: unitId,
+        arm: unitId >= 1 && unitId <= 5 ? unitId : Math.floor(unitId / 32),
+        confirmed: true,
+        dispatch: { sent: true, mode: "NO_ROS_DEBUG", confirmed: true },
+      })),
       debug: true,
     },
     "NO_ROS_DEBUG: 模块锁定模拟成功"

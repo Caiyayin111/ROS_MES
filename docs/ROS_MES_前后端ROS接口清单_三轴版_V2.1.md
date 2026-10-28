@@ -2,7 +2,7 @@
 
 > **收录说明**（2026-10-25）：本文档由队友基于 ROS 源码现状整理（整理日期 2026-10-24），收录进仓库时仅把原文中的本机绝对路径链接改为仓库相对路径；**取代**《ROS_MES_前后端接口字段文档.md》中的 ROS 话题 / 消息 / device_id 编码部分（四轴布局已失效），该文档的业务接口与数据库部分仍有效。**团队已确认：本文档为 ROS 对接唯一权威。**
 >
-> **后端已处理项**（同日提交，勿重复修改）：7.1 模块确认回执超时已调至 35s（`ROS_MODULE_CONFIRM_ACK_WAIT_S`）；7.2 后端已按 §7.2 实现——`/module/` 请求体 **station 必传**（操作员选组，后端不做默认推导），module_id 保持业务模块号原样回执；7.3 的后端部分（校验 1~15、反馈标签表三轴化）已完成，且种子数据已补齐 5 臂（Unit_ID 128/160，延续每臂 +32 规律）；7.4 的 `/hardware/cmd_ack` 已加入反馈流，**枚举已从源码提取**：仅超位拒绝一种（`ack_msg=1, result=3, detail=1上限/2下限`），无成功回执；7.8 已解决（旧 rospy 路径迁入 `app/ros/ros1/native.py`）。**前端已处理项**：`deviceEncoding.ts` 已改三轴编码。**新增**：急停解除接口 `POST /api/control/emergency_stop/release`（发布 `/control/softstop_release`，softstop_node 源码确认转发 `[0x04]`）。
+> **后端已处理项**（同日提交，勿重复修改）：7.1 模块确认回执超时已调至 35s（`ROS_MODULE_CONFIRM_ACK_WAIT_S`）；模块确认业务接口使用 `module_id/device_id/unit_id(s)`，不向前端暴露 ROS 的 `seg/arm/position`；后端适配层通过显式 `ROS_MODULE_SEG_MAP` 将业务 `module_id` 映射为 ROS `seg`，再按 `Unit_ID÷32` 映射为 `arm=1~5`，发送 `position=[100, seg, arm]`；7.3 的反馈标签表三轴化已完成，源码种子定义包含 5 臂（Unit_ID 32/64/96/128/160），实际部署数据库以现有记录为准；7.4 的 `/hardware/cmd_ack` 已加入反馈流，**枚举已从源码提取**：仅超位拒绝一种（`ack_msg=1, result=3, detail=1上限/2下限`），无成功回执；7.8 已解决（旧 rospy 路径迁入 `app/ros/ros1/native.py`）。**前端已处理项**：`deviceEncoding.ts` 已改三轴编码。**新增**：急停解除接口 `POST /api/control/emergency_stop/release`（发布 `/control/softstop_release`，softstop_node 源码确认转发 `[0x04]`）。
 >
 > **图纸话题已定论**（2026-10-25 ROS 端确认"按接口的来"）：话题以本文档 `/frontend_pointcloud_topic`（无前缀）为准，ROS 端自行将其 `rob_arm.env` 的 `ROS_TOPIC_FRONTEND_POINTCLOUD` 改为无前缀；后端零改动。联调时验证一次"图纸下发 → 三视图"链路即可。
 
@@ -27,7 +27,7 @@
 |---|---|---|---|
 | `/api/control/finetuning` | POST | `{module_id, device_id, unit_id, parameter_name, position}` | 按 `parameter_name` 路由到 `/control/adjust_{rotation,swing,telescopic}_cmd` |
 | `/api/coordination/send` | POST | 图纸文件路径 | `/frontend_pointcloud_topic`（std_msgs/String，JSON `{"file_path":...}`）→ data_process_node |
-| `/api/module/` | POST | `{module_id, station}` | `/control/module_cmd`（IntCmd）→ module_confirme_node；**station 必传**（操作员选组 1~15），module_id 业务模块号原样回执 |
+| `/api/module/` | POST | `{x, y, module_id?, device_id?, unit_ids}` | `/control/module_cmd`（IntCmd）→ module_confirme_node；业务层继续使用模块/设备/机械臂单元字段，后端逐个确认所选 `unit_ids` |
 | `/api/control/feedback/ws` | WebSocket | — | 后端订阅 8 路 ROS 反馈话题转发（含 V2.1 新增 `/hardware/cmd_ack`） |
 | `/api/control/emergency_stop` | POST | — | `/control/softstop` → softstop_node 转发 `/arm/cmd_vel` [1] |
 | `/api/control/emergency_stop/release` | POST | — | `/control/softstop_release` → softstop_node 转发 `/arm/cmd_vel` [4]（V2.1 新增） |
@@ -46,7 +46,7 @@
 | `/control/adjust_rotation_cmd` | RotationCmd | `module_id/device_id` 前端透传；`position=[float(增量°)]` |
 | `/control/adjust_swing_cmd` | SwingCmd | 同上 |
 | `/control/adjust_telescopic_cmd` | TelescopicCmd | 同上（增量 mm） |
-| `/control/module_cmd` | IntCmd | `{module_id, device_id:0, position:[100, station]}`，见 §6 握手协议 |
+| `/control/module_cmd` | IntCmd | `{module_id, device_id:0, position:[100, seg, arm]}`，见 §6 握手协议；`seg/arm` 仅在 ROS 适配层生成 |
 | `/frontend_pointcloud_topic` | std_msgs/String | `{"file_path": "<图纸路径>"}` |
 
 发布流程：`advertise` → 等 0.1s → `publish`。仅**模块确认**会临时订阅回执话题等待结果。
@@ -90,13 +90,28 @@
 
 方案来源：《固定工位会话式模块确认方案》。流程：宣告 → 分配 → 三项核对（UID56+SEG+Result=0）→ READY。
 
-**下行** `/control/module_cmd`（IntCmd）：
+### 6.1 业务接口与 ROS 适配边界
+
+前端和后端业务接口继续使用项目已有字段：
+
+| 字段 | 含义 |
+|---|---|
+| `module_id` | 业务模块号，后端原样带入 ROS 回执匹配 |
+| `device_id` | 业务模块设备号，沿用现有模块接口语义 |
+| `unit_ids` | 本次选择的机械臂 `Unit_ID` 数组；前端可一次选择多台，后端逐台确认 |
+| `x/y` | 现有模块坐标字段，保留用于模块选择和兼容既有调用 |
+
+业务接口不接收 `station`、`seg` 或 ROS `arm`。后端适配层从显式 `ROS_MODULE_SEG_MAP` 读取 `module_id → seg`，并按机械臂 `Unit_ID` 映射 `arm=1~5`。映射缺失时必须拒绝下发，禁止把业务模块号直接猜作 `seg`。
+
+### 6.2 下行 `/control/module_cmd`（IntCmd）
 
 | 字段 | 值 |
 |---|---|
 | `module_id` | 后端业务模块号，**回执原样返回**（后端按它匹配 ACK） |
 | `device_id` | 固定 0 |
-| `position` | `[100, station]`：100=触发握手；**station=工位号 1~15（SEG=station-1）** |
+| `position` | `[100, seg, arm]`：100=触发握手；`seg` 为 ROS 下位机组号 0~14；`arm` 为组内臂槽位 1~5 |
+
+`device_id=0` 是当前 ROS 模块级指令协议的固定值，仅存在于 ROS 适配后的 IntCmd；业务层的 `device_id` 继续保留原命名。一次请求选择多个 `unit_ids` 时，后端逐个发布一条 `[100, seg, arm]`；同一时间只给一台未绑定机械臂上电。某条确认失败时停止后续项，前端保留成功/失败/未处理状态供重试。
 
 **回执**（二选一，网关等待其中一个）：
 
@@ -116,14 +131,14 @@ ROS 侧超时参数（rob_arm.env）：等宣告 `MODULE_CONFIRM_WAIT_ANNOUNCE_S
 
 后端等待回执超时已与普通超时分离：`RosbridgeClient(module_confirm_timeout=…)`，默认取 `ROS_MODULE_CONFIRM_ACK_WAIT_S`（35s）。
 
-### 🔴 7.2 模块确认缺工位号 —— 新协议立即失败（**后端已修，前端待接**）
+### 🔴 7.2 业务字段与 ROS 下行字段分层 —— **已按新协议调整**
 
-后端已发 `position=[100, station]`，且 **station 为 `/module/` 请求体必传字段**（操作员选择"确认第几组"），后端不做任何默认推导（推错组会误握手物理工位），缺 station 直接 422。module_id 保持业务模块号、无范围限制，ROS 端原样回执用于 ACK 匹配。**前端待办：模块锁定页增加"确认第几组"选择并把 station 带到请求里。**
+旧流程的 `station` 已移除。前端只选择模块和机械臂，业务请求使用 `module_id/device_id/unit_ids`；后端通过 `ROS_MODULE_SEG_MAP` 完成 `module_id → seg`，再把 `Unit_ID` 映射成 `arm=1~5`，最终发送 `position=[100, seg, arm]`。映射缺失或 `arm` 无法落在 1~5 时直接返回 422，不能回退为 `position=[100, station]` 或把 `module_id` 当作 `seg`。
 
-### 🔴 7.3 device_id 三轴化 —— 后端已改，前端已同步，种子数据待决（**部分待办**）
+### 🔴 7.3 device_id 三轴化 —— 后端已改，前端已同步，部署库数据需核对（**部分待办**）
 
 前端 `deviceEncoding.ts` 与后端已同步为三轴：`(arm-1)*3 + {1,2,3}`（1~15）、臂级 21~25 不变。
-**待决**：`armIndexFromUnitId` 按 Unit_ID÷32 推臂号（种子数据 32/64/96 仅 3 臂），臂 4/5 无法识别，需补种子或改映射。
+源码种子定义包含 5 臂（32/64/96/128/160），但现有部署数据库可能仍只有 3 臂；上线前必须核对 `Unit` 表，不能因源码已有 5 臂就假定部署库已补齐。
 
 ### 🟠 7.4 微调无回执 —— 超位拒绝前端无感知（**后端已修，前端待接**）
 

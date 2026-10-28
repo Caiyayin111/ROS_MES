@@ -12,10 +12,10 @@ import {
 const msg = ref("前进");
 const result = ref("");
 
-// 测试用 ID 改为输入框可调（默认值为 V2 有效编码：模块18=(1,2)，device_id 1=一号臂旋转轴）
+// 测试用 ID 改为输入框可调（模块确认使用业务 module_id/device_id/unit_ids）
 const testModuleId = ref(18);
-const testStation = ref(1); // V2.1 模块确认握手：工位号 1~15，后端必传
 const testDeviceId = ref(1);
+const testUnitIds = ref<number[]>([32]);
 const testUnitId = ref(32);
 const testUnitRowId = ref(1);
 const testDrawingId = ref(1);
@@ -44,8 +44,8 @@ const handleCreateModule = async () => {
     y: 2,
     module_id: Number(testModuleId.value),
     device_id: Number(testDeviceId.value),
+    unit_ids: [...testUnitIds.value],
     position: 0,
-    station: Number(testStation.value),
   });
 
   showResult(res);
@@ -105,12 +105,14 @@ const handleFineTuning = async () => {
       </div>
 
       <div class="row">
-        <span>station（工位号）：</span>
-        <el-input-number v-model="testStation" :min="1" :max="15" />
         <span>module_id：</span>
         <el-input-number v-model="testModuleId" :min="17" :max="136" />
         <span>device_id：</span>
         <el-input-number v-model="testDeviceId" :min="1" :max="25" />
+        <span>unit_ids：</span>
+        <el-select v-model="testUnitIds" multiple collapse-tags style="width: 180px">
+          <el-option v-for="unitId in [32, 64, 96, 128, 160]" :key="unitId" :label="String(unitId)" :value="unitId" />
+        </el-select>
         <span>unit_id：</span>
         <el-input-number v-model="testUnitId" :min="32" :max="160" :step="32" />
         <span>unit_row_id：</span>

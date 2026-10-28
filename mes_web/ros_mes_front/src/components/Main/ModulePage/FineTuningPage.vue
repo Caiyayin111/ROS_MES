@@ -621,6 +621,7 @@ onMounted(async () => {
   const qDeviceId = route.query.device_id ?? route.query.Device_ID;
   const qX = route.query.x;
   const qY = route.query.y;
+  const qUnitIds = route.query.unit_ids;
 
   if (qModuleId) {
     moduleId.value = parseInt(qModuleId as string);
@@ -653,7 +654,20 @@ onMounted(async () => {
         ? drawingRes.data
         : [];
 
-    armIdList.value = units.filter((item: any) => Number.isFinite(Number(item.id)));
+    const confirmedUnitIds = String(qUnitIds || "")
+      .split(",")
+      .map((value) => Number(value.trim()))
+      .filter((value) => Number.isFinite(value));
+    const availableUnits = units.filter((item: any) => Number.isFinite(Number(item.id)));
+    armIdList.value = confirmedUnitIds.length > 0
+      ? availableUnits.filter((item: any) => confirmedUnitIds.includes(Number(item.Unit_ID)))
+      : availableUnits;
+
+    if (confirmedUnitIds.length > 0 && armIdList.value.length === 0) {
+      ElMessage.warning("未找到本次确认成功的机械臂，请返回模块管理页重新确认");
+      router.push("/moduleManagement");
+      return;
+    }
     drawingList.value = drawings.filter((item: any) => Number.isFinite(Number(item.drawingId)));
 
     if (armIdList.value.length === 0) {

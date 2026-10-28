@@ -27,25 +27,36 @@
               @input="handleYChange(inputY)"
             />
           </div>
-          <div class="input-group">
-            <span class="prefix">工位号</span>
-            <el-input-number
-              v-model="station"
-              class="binary-input station-input"
-              :min="1"
-              :max="15"
-              controls-position="right"
-            />
+          <div class="input-group arm-select-group">
+            <span class="prefix">机械臂</span>
+            <el-select
+              v-model="selectedUnitIds"
+              multiple
+              collapse-tags
+              collapse-tags-tooltip
+              clearable
+              :loading="armsLoading"
+              :disabled="!currentDeviceId || armOptions.length === 0"
+              placeholder="请选择机械臂"
+              class="arm-select"
+            >
+              <el-option
+                v-for="item in armOptions"
+                :key="item.Unit_ID"
+                :label="formatArmLabel(item)"
+                :value="Number(item.Unit_ID)"
+              />
+            </el-select>
           </div>
           <el-button type="primary" class="lock-btn" @click="handleLockAndJump"
-            >锁定并下发</el-button
+            >确认并进入微调</el-button
           >
         </div>
         <div class="hint-text">
           系统锁定目标: X(十进制
           <span class="highlight">{{ selectedCell.x }}</span
           >) - Y(十进制 <span class="highlight">{{ selectedCell.y }}</span
-          >)；工位号 = 本次确认上电的组号（1~15），需与操作员实际给电的组一致
+          >)；请选择本模块要确认的机械臂，可多选，确认会按顺序逐台下发
         </div>
       </div>
 
@@ -73,10 +84,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
-import { createModule, getDeviceListApi } from "@/api/rosApi";
+import { createModule, getDeviceListApi, getUnitsByDeviceApi } from "@/api/rosApi";
 
 
 const router = useRouter();
@@ -98,8 +109,10 @@ for (let y = 1; y <= matrixSize; y++) {
 // 1. 输入框绑定值
 const inputX = ref(1);
 const inputY = ref(1);
-// V2.1 模块确认握手：station=工位号 1~15（操作员本次给目标组上电的组号），后端必传
-const station = ref(1);
+const selectedUnitIds = ref<number[]>([]);
+const armOptions = ref<any[]>([]);
+const armsLoading = ref(false);
+const deviceList = ref<any[]>([]);
 
 // 2. 当前选中的格子
 const selectedCell = ref({ x: 1, y: 1 });
@@ -120,6 +133,41 @@ const currentModuleId = computed(() =>
   xyToModuleId(inputX.value, inputY.value)
 );
 
+const currentDeviceId = computed(() => {
+  const matched = deviceList.value.find(
+    (item: any) => Number(item.DeviceAddress) === Number(currentModuleId.value)
+  );
+  return matched ? Number(matched.Device_ID) : 0;
+});
+
+const formatArmLabel = (item: any) =>
+  item.UnitDescript ? `${item.UnitDescript}（Unit_ID=${item.Unit_ID}）` : `机械臂 ${item.Unit_ID}`;
+
+const unwrapList = (response: any): any[] => {
+  if (Array.isArray(response)) return response;
+  return Array.isArray(response?.data) ? response.data : [];
+};
+
+const loadArmOptions = async () => {
+  selectedUnitIds.value = [];
+  armOptions.value = [];
+  if (!currentDeviceId.value) return;
+  armsLoading.value = true;
+  try {
+    const response = await getUnitsByDeviceApi(currentDeviceId.value);
+    armOptions.value = unwrapList(response).filter(
+      (item: any) => Number.isFinite(Number(item.Unit_ID))
+    );
+    if (armOptions.value.length === 0) {
+      ElMessage.warning("该模块下没有登记机械臂");
+    }
+  } catch (err) {
+    ElMessage.error("获取模块机械臂失败，请检查后端服务");
+  } finally {
+    armsLoading.value = false;
+  }
+};
+
 // 2. 监听下方矩阵点击：一旦格子变化，更新上方输入框
 watch(
   selectedCell,
@@ -129,6 +177,8 @@ watch(
   },
   { deep: true, immediate: true }
 );
+
+watch(currentModuleId, loadArmOptions);
 
 
 //X/Y 输入函数
@@ -181,29 +231,13 @@ const handleLockAndJump = async () => {
     return;
   }
 
-  if (!station.value || station.value < 1 || station.value > 15) {
-    ElMessage.warning("请选择 1-15 范围内的工位号（与操作员上电的组号一致）");
+  if (selectedUnitIds.value.length === 0) {
+    ElMessage.warning("请至少选择一台机械臂");
     return;
   }
 
-  let deviceId = 0;
-  try {
-    const deviceRes: any = await getDeviceListApi();
-    const devices = Array.isArray(deviceRes)
-      ? deviceRes
-      : Array.isArray(deviceRes.data)
-        ? deviceRes.data
-        : [];
-    const matchedDevice = devices.find(
-      (item: any) => Number(item.DeviceAddress) === Number(module_id)
-    );
-    if (!matchedDevice) {
-      ElMessage.warning("该坐标模块尚未在设备信息管理中登记，请先添加模块");
-      return;
-    }
-    deviceId = Number(matchedDevice.Device_ID);
-  } catch (err: any) {
-    ElMessage.error("获取模块设备信息失败，请检查后端服务");
+  if (!currentDeviceId.value) {
+    ElMessage.warning("该坐标模块尚未在设备信息管理中登记，请先添加模块");
     return;
   }
 
@@ -211,9 +245,9 @@ const handleLockAndJump = async () => {
     x,
     y,
     module_id,
-    device_id: deviceId,
+    device_id: currentDeviceId.value,
+    unit_ids: [...selectedUnitIds.value],
     position: 0,
-    station: station.value,
   };
 
   console.log("模块下发提交数据：", payload);
@@ -224,15 +258,19 @@ const handleLockAndJump = async () => {
     console.log("模块下发成功：", res);
 
     if (res && res.code === 200) {
-      ElMessage.success(`模块 ${module_id} 已锁定，正在跳转微调页面...`);
+      const confirmedUnitIds = Array.isArray(res.data?.confirmations)
+        ? res.data.confirmations.map((item: any) => Number(item.unit_id))
+        : [...selectedUnitIds.value];
+      ElMessage.success(`模块 ${module_id} 的 ${confirmedUnitIds.length} 台机械臂确认成功，正在跳转微调页面...`);
 
       router.push({
         name: "FineTuningPage",
         query: {
           module_id,
-          device_id: deviceId,
+          device_id: currentDeviceId.value,
           x,
           y,
+          unit_ids: confirmedUnitIds.join(","),
         },
       });
     } else {
@@ -241,19 +279,39 @@ const handleLockAndJump = async () => {
   } catch (err: any) {
     console.error("模块锁定异常:", err.response?.data || err);
 
+    const detail = err.response?.data?.detail;
+    const detailMessage = typeof detail === "string"
+      ? detail
+      : detail?.message || detail?.reason;
+
     ElMessage.error(
-      err.response?.data?.detail ||
+      detailMessage ||
         err.response?.data?.message ||
         err.message ||
         "请求失败，请检查后端服务"
     );
   }
 };
+
+onMounted(async () => {
+  try {
+    deviceList.value = unwrapList(await getDeviceListApi());
+    await loadArmOptions();
+  } catch (err) {
+    ElMessage.error("获取模块设备信息失败，请检查后端服务");
+  }
+});
 </script>
 
 <style scoped>
 .module-management {
   overflow: auto;
+}
+.arm-select-group {
+  min-width: 280px;
+}
+.arm-select {
+  width: 280px;
 }
 /* 新的操作栏样式 */
 .action-bar {

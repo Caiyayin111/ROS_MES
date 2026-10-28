@@ -11,6 +11,15 @@
 
 ---
 
+## 2026-10-28（模块确认协议分层调整）
+
+- 模块确认前后端业务层与 ROS 下行层分离（已完成）
+  - 业务接口继续使用现有 `module_id`、`device_id`、`unit_id/unit_ids` 字段，移除现场不使用的 `station`；前端一次选择模块和多个机械臂，后端逐个确认。
+  - 后端新增显式 `ROS_MODULE_SEG_MAP` 配置，用于 `module_id → seg`；禁止把业务模块号直接猜作 ROS `seg`，缺少映射时拒绝下发。
+  - 后端根据机械臂 `Unit_ID` 映射 ROS `arm=1~5`，向 `/control/module_cmd` 发送 `IntCmd`：`module_id` 原样透传、ROS `device_id=0`、`position=[100, seg, arm]`。
+  - 成功/失败回执契约保持不变：成功 `/hardware/module_confirm_success` 的 `position=[100]`，失败 `/hardware/web_module_cmd` 的 `position=[1]`；模块号按业务 `module_id` 匹配。
+  - 默认种子代码包含五臂 `Unit_ID=32/64/96/128/160`，部署数据库仍需实际核对；详见《ROS_MES_前后端ROS接口清单_三轴版_V2.1》§6、§7.2。
+
 ## 2026-10-25（八）
 
 - 伸缩轴单位契约定稿：**话题边界两向均为 mm，后端零换算**（51 passed 全绿）

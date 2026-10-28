@@ -117,24 +117,33 @@ def build_drawing_path_publish_payload(
 
 def build_module_confirm_publish_payload(
     module_id: int,
+    seg: int,
+    arm: int,
     profile: RosProfile | None = None,
-    station: int | None = None,
 ) -> Dict[str, Any]:
     """构造模块确认握手消息。
 
-    V2.1 会话式握手契约（docs/ROS_MES_前后端ROS接口清单_三轴版_V2.1.md §6/§7.2）：
-      - position = [100, station]，station=工位号 1~15，由操作员选择确认第几组，
-        **前端必须显式传 station**，不做任何默认推导（推导错组会误握手物理工位）；
+    当前会话式握手契约：
+      - position = [100, seg, arm]；100=触发握手，seg=下位机组号 0~14，
+        arm=全局机械臂编号 1~5；
       - module_id = 业务模块号，无范围限制，ROS 端原样回执用于 ACK 匹配；
       - 回执：module_id 原样返回、device_id=0、position[0]=100 成功 / 1 失败。
     """
     profile = profile or get_active_profile()
-    if station is None:
-        raise RosbridgeError("缺少工位号 station（1~15）：V2.1 握手要求前端显式下发，不做默认推导")
-    module_id = int(module_id)
-    station = int(station)
-    if not (1 <= station <= 15):
-        raise RosbridgeError(f"工位号 station={station} 非法（V2.1 握手协议要求 1~15）")
+    try:
+        module_id = int(module_id)
+        seg = int(seg)
+        arm = int(arm)
+    except (TypeError, ValueError) as exc:
+        raise RosbridgeError(
+            f"模块确认参数非法：module_id={module_id!r}, seg={seg!r}, arm={arm!r}"
+        ) from exc
+    if module_id <= 0:
+        raise RosbridgeError(f"模块确认 module_id={module_id} 非法（必须为正整数）")
+    if not (0 <= seg <= 14):
+        raise RosbridgeError(f"模块确认 seg={seg} 非法（允许范围 0~14）")
+    if not (1 <= arm <= 5):
+        raise RosbridgeError(f"模块确认 arm={arm} 非法（允许范围 1~5）")
     return {
         "topic": profile.topics["module_cmd"],
         "message_type": profile.message_type("IntCmd"),
@@ -142,9 +151,50 @@ def build_module_confirm_publish_payload(
             "header": {"stamp": _stamp(profile), "frame_id": ""},
             "module_id": module_id,
             "device_id": 0,
-            "position": [100, station],
+            "position": [100, seg, arm],
         },
     }
+
+
+def resolve_module_seg(module_id: int) -> int:
+    """从后端显式配置中取得业务模块对应的 ROS SEG。"""
+    try:
+        module_id = int(module_id)
+        mapping = json.loads(settings.ROS_MODULE_SEG_MAP or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RosbridgeError("ROS_MODULE_SEG_MAP 不是合法 JSON 映射") from exc
+    if not isinstance(mapping, dict):
+        raise RosbridgeError("ROS_MODULE_SEG_MAP 必须是 JSON 对象")
+    raw_seg = mapping.get(str(module_id), mapping.get(module_id))
+    if raw_seg is None:
+        raise RosbridgeError(
+            f"模块 module_id={module_id} 未配置 ROS SEG 映射，请配置 ROS_MODULE_SEG_MAP"
+        )
+    try:
+        seg = int(raw_seg)
+    except (TypeError, ValueError) as exc:
+        raise RosbridgeError(f"模块 module_id={module_id} 的 SEG 映射无效：{raw_seg!r}") from exc
+    if not (0 <= seg <= 14):
+        raise RosbridgeError(f"模块 module_id={module_id} 的 SEG={seg} 超出范围 0~14")
+    return seg
+
+
+def resolve_arm_from_unit_id(unit_id: int) -> int:
+    """把业务机械臂 Unit_ID 映射为 ROS arm 1~5。"""
+    try:
+        unit_id = int(unit_id)
+    except (TypeError, ValueError) as exc:
+        raise RosbridgeError(f"机械臂 unit_id 非法：{unit_id!r}") from exc
+    # 调试数据允许直接使用 1~5；正式种子数据使用 32 的倍数。
+    if 1 <= unit_id <= 5:
+        return unit_id
+    if unit_id > 0 and unit_id % 32 == 0:
+        arm = unit_id // 32
+        if 1 <= arm <= 5:
+            return arm
+    raise RosbridgeError(
+        f"机械臂 unit_id={unit_id} 无法映射为 arm（支持 1~5 或 32/64/96/128/160）"
+    )
 
 
 class RosbridgeClient:

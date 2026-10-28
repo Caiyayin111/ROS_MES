@@ -27,6 +27,9 @@ const AXIS_OFFSETS: Record<AxisParameterName, number> = {
  */
 export function armIndexFromUnitId(unitId: number): number {
   const id = Number(unitId || 0);
+  if (id >= 1 && id <= 5) {
+    return id;
+  }
   if (id > 0 && id % 32 === 0) {
     return Math.min(Math.floor(id / 32), 5);
   }
