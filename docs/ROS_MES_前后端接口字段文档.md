@@ -97,6 +97,9 @@
 | 3 | `/module/` | POST | 否（白名单） | `/control/module_cmd` (IntCmd) | 锁定目标模块并下发确认指令 |
 
 **接口 3：模块锁定下发**
+
+当前页面调用时机：模块管理页只选模块并导航，不下发确认；微调页首次配置弹窗可选择 1~5 台机械臂和一张图纸，先调用本接口（`unit_ids` 为所选 `Unit_ID` 数组），确认成功后再为每台确认成功的机械臂调用 §2.3 的图纸下发接口。微调主页面只在本次确认成功的机械臂之间切换；后端仍支持多个 `unit_ids` 的顺序确认。
+
 - 请求体（业务层字段；ROS 的 `seg/arm/position` 不由前端传递）：
 
 | 字段 | 类型 | 必填 | 说明 |
@@ -105,7 +108,7 @@
 | `y` | int | ✔（或别名） | Y 坐标 (1~8)；别名 `Y/targetY/moduleY/row` 或 `position.y` |
 | `module_id` | int | 可选 | 默认 `x*16+y` |
 | `device_id` | int | 可选 | 设备 ID |
-| `unit_ids` | int[] | ✔ | 本次选择的机械臂 `Unit_ID` 列表；后端逐个确认 |
+| `unit_ids` | int[] | ✔ | 本次确认的机械臂 `Unit_ID` 列表；页面可传 1~5 台，后端按顺序逐个确认 |
 | `position` | int | 可选 | 位置（前端传 0）；也可传对象 `{x, y}` |
 
 - 响应：
@@ -164,6 +167,8 @@
 - 响应：`{"code":200, "message":"target drawing path dispatched and pointcloud views are ready", "data":{五元组}, "dispatch":{...}, "views":{"front":"/api/coordination/views/front","side":"...","top":"..."}}`
 - ROS 消息（std_msgs/String）：`data` = JSON 字符串 `{"file_path": "相对 robot_control_backend/scripts 的图纸路径"}`
 - 流程：校验参数 → 查库取图纸路径 → 转相对路径 → rosbridge 发布 → 等待点云三视图生成（最长 5 秒，超时 504）
+
+页面顺序为“选模块 → 多选 1~5 台机械臂和一张图纸 → 批量机械臂确认 → 按臂图纸下发 → 微调”。全部确认和图纸下发成功后进入微调页；主页面提供机械臂切换和重新下发图纸入口，已确认机械臂的图纸、三视图和微调状态按臂分别保留于本次页面会话中。切换机械臂不会再次弹出选择框；重新下发只作用于当前机械臂。请求进行中禁用目标切换，避免数据串臂。
 
 **接口 5：点云视图代理**
 - 路径参数：`view_name` ∈ {`top`, `front`, `side`}（其他值 404）

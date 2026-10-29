@@ -3,11 +3,19 @@
     <div class="mes-page-header">
       <div>
         <h2 class="mes-page-title">模块管理与姿态调度</h2>
-        <p class="mes-page-sub">选择矩阵坐标锁定目标模块，下发后进入姿态微调</p>
+        <p class="mes-page-sub">先锁定模块坐标，下一步一次完成机械臂确认与图纸下发</p>
       </div>
     </div>
     <div class="outer-table">
-      <div class="action-bar-restored">
+      <div class="module-command-card">
+        <div class="command-card-topline">
+          <span class="step-kicker">STEP 01 · MODULE</span>
+          <span class="module-registration" :class="{ ready: currentDeviceId }">
+            {{ currentDeviceId ? "模块已登记" : "等待选择已登记模块" }}
+          </span>
+        </div>
+        <div class="command-card-title">选择目标模块</div>
+        <div class="command-card-subtitle">选择坐标后，进入下一步配置本次要操作的机械臂与目标图纸。</div>
         <div class="input-row">
           <div class="input-group">
             <span class="prefix">X 坐标</span>
@@ -27,40 +35,26 @@
               @input="handleYChange(inputY)"
             />
           </div>
-          <div class="input-group arm-select-group">
-            <span class="prefix">机械臂</span>
-            <el-select
-              v-model="selectedUnitIds"
-              multiple
-              collapse-tags
-              collapse-tags-tooltip
-              clearable
-              :loading="armsLoading"
-              :disabled="!currentDeviceId || armOptions.length === 0"
-              placeholder="请选择机械臂"
-              class="arm-select"
-            >
-              <el-option
-                v-for="item in armOptions"
-                :key="item.Unit_ID"
-                :label="formatArmLabel(item)"
-                :value="Number(item.Unit_ID)"
-              />
-            </el-select>
-          </div>
-          <el-button type="primary" class="lock-btn" @click="handleLockAndJump"
-            >确认并进入微调</el-button
+          <el-button type="primary" class="lock-btn" :loading="moduleBusy" :disabled="moduleBusy" @click="handleLockAndJump"
+            >进入机械臂配置</el-button
           >
         </div>
-        <div class="hint-text">
-          系统锁定目标: X(十进制
-          <span class="highlight">{{ selectedCell.x }}</span
-          >) - Y(十进制 <span class="highlight">{{ selectedCell.y }}</span
-          >)；请选择本模块要确认的机械臂，可多选，确认会按顺序逐台下发
+        <div class="module-target-line">
+          当前目标 <strong>({{ selectedCell.x }}, {{ selectedCell.y }})</strong>
+          <span>·</span>
+          <span>模块号 {{ currentModuleId ?? "—" }}</span>
         </div>
       </div>
 
       <!-- 8x8 模块矩阵 -->
+      <div class="matrix-section">
+        <div class="matrix-section-heading">
+          <div>
+            <span class="step-kicker">MODULE MAP</span>
+            <h3>模块坐标</h3>
+          </div>
+          <span class="matrix-help">点击任意格子切换目标</span>
+        </div>
       <div class="matrix-container">
         <div class="matrix">
           <div v-for="(row, yIndex) in matrix" :key="yIndex" class="matrix-row">
@@ -79,6 +73,7 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
   </div>
 </template>
@@ -87,7 +82,7 @@
 import { ref, computed, watch, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 import { useRouter } from "vue-router";
-import { createModule, getDeviceListApi, getUnitsByDeviceApi } from "@/api/rosApi";
+import { getDeviceListApi } from "@/api/rosApi";
 
 
 const router = useRouter();
@@ -109,9 +104,7 @@ for (let y = 1; y <= matrixSize; y++) {
 // 1. 输入框绑定值
 const inputX = ref(1);
 const inputY = ref(1);
-const selectedUnitIds = ref<number[]>([]);
-const armOptions = ref<any[]>([]);
-const armsLoading = ref(false);
+const moduleBusy = ref(false);
 const deviceList = ref<any[]>([]);
 
 // 2. 当前选中的格子
@@ -140,32 +133,9 @@ const currentDeviceId = computed(() => {
   return matched ? Number(matched.Device_ID) : 0;
 });
 
-const formatArmLabel = (item: any) =>
-  item.UnitDescript ? `${item.UnitDescript}（Unit_ID=${item.Unit_ID}）` : `机械臂 ${item.Unit_ID}`;
-
 const unwrapList = (response: any): any[] => {
   if (Array.isArray(response)) return response;
   return Array.isArray(response?.data) ? response.data : [];
-};
-
-const loadArmOptions = async () => {
-  selectedUnitIds.value = [];
-  armOptions.value = [];
-  if (!currentDeviceId.value) return;
-  armsLoading.value = true;
-  try {
-    const response = await getUnitsByDeviceApi(currentDeviceId.value);
-    armOptions.value = unwrapList(response).filter(
-      (item: any) => Number.isFinite(Number(item.Unit_ID))
-    );
-    if (armOptions.value.length === 0) {
-      ElMessage.warning("该模块下没有登记机械臂");
-    }
-  } catch (err) {
-    ElMessage.error("获取模块机械臂失败，请检查后端服务");
-  } finally {
-    armsLoading.value = false;
-  }
 };
 
 // 2. 监听下方矩阵点击：一旦格子变化，更新上方输入框
@@ -177,9 +147,6 @@ watch(
   },
   { deep: true, immediate: true }
 );
-
-watch(currentModuleId, loadArmOptions);
-
 
 //X/Y 输入函数
 const handleXChange = (val: number) => {
@@ -217,6 +184,7 @@ const handleCellClick = (cell: any) => {
 };
 // ========== 锁定并下发：跳转到微调页面 ==========
 const handleLockAndJump = async () => {
+  if (moduleBusy.value) return;
   const x = Number(selectedCell.value.x);
   const y = Number(selectedCell.value.y);
   const module_id = xyToModuleId(x, y);
@@ -231,72 +199,25 @@ const handleLockAndJump = async () => {
     return;
   }
 
-  if (selectedUnitIds.value.length === 0) {
-    ElMessage.warning("请至少选择一台机械臂");
-    return;
-  }
-
   if (!currentDeviceId.value) {
     ElMessage.warning("该坐标模块尚未在设备信息管理中登记，请先添加模块");
     return;
   }
 
-  const payload = {
-    x,
-    y,
-    module_id,
-    device_id: currentDeviceId.value,
-    unit_ids: [...selectedUnitIds.value],
-    position: 0,
-  };
-
-  console.log("模块下发提交数据：", payload);
-
+  moduleBusy.value = true;
   try {
-    const res: any = await createModule(payload);
-
-    console.log("模块下发成功：", res);
-
-    if (res && res.code === 200) {
-      const confirmedUnitIds = Array.isArray(res.data?.confirmations)
-        ? res.data.confirmations.map((item: any) => Number(item.unit_id))
-        : [...selectedUnitIds.value];
-      ElMessage.success(`模块 ${module_id} 的 ${confirmedUnitIds.length} 台机械臂确认成功，正在跳转微调页面...`);
-
-      router.push({
-        name: "FineTuningPage",
-        query: {
-          module_id,
-          device_id: currentDeviceId.value,
-          x,
-          y,
-          unit_ids: confirmedUnitIds.join(","),
-        },
-      });
-    } else {
-      ElMessage.error(res?.message || res?.msg || "模块锁定失败，请重试");
-    }
-  } catch (err: any) {
-    console.error("模块锁定异常:", err.response?.data || err);
-
-    const detail = err.response?.data?.detail;
-    const detailMessage = typeof detail === "string"
-      ? detail
-      : detail?.message || detail?.reason;
-
-    ElMessage.error(
-      detailMessage ||
-        err.response?.data?.message ||
-        err.message ||
-        "请求失败，请检查后端服务"
-    );
+    await router.push({
+      name: "FineTuningPage",
+      query: { module_id, device_id: currentDeviceId.value, x, y },
+    });
+  } finally {
+    moduleBusy.value = false;
   }
 };
 
 onMounted(async () => {
   try {
     deviceList.value = unwrapList(await getDeviceListApi());
-    await loadArmOptions();
   } catch (err) {
     ElMessage.error("获取模块设备信息失败，请检查后端服务");
   }
@@ -306,12 +227,6 @@ onMounted(async () => {
 <style scoped>
 .module-management {
   overflow: auto;
-}
-.arm-select-group {
-  min-width: 280px;
-}
-.arm-select {
-  width: 280px;
 }
 /* 新的操作栏样式 */
 .action-bar {
@@ -414,7 +329,8 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center; /* 内部元素居中 */
   gap: 12px;
-  width: fit-content; /* 拒绝拉伸，宽度由内容撑开 */
+  width: min(100%, 980px);
+  box-sizing: border-box;
   margin-left: auto;
   margin-right: auto; /* 整个面板整体居中 */
 }
@@ -423,6 +339,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 16px;
+  flex-wrap: wrap;
 }
 
 .input-group {
@@ -473,5 +390,173 @@ onMounted(async () => {
   color: var(--mes-primary);
   font-weight: bold;
   font-size: 14px;
+}
+
+/* 模块页视觉层级：把坐标选择作为唯一主任务，下一步动作单独突出。 */
+.module-management {
+  background:
+    radial-gradient(circle at 88% 8%, rgba(37, 99, 235, 0.08), transparent 28%),
+    var(--mes-bg);
+}
+
+.module-command-card,
+.matrix-section {
+  width: min(100%, 1040px);
+  margin: 0 auto;
+}
+
+.module-command-card {
+  padding: 24px 28px 20px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-left: 4px solid var(--mes-primary);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+}
+
+.command-card-topline,
+.matrix-section-heading,
+.module-target-line {
+  display: flex;
+  align-items: center;
+}
+
+.command-card-topline,
+.matrix-section-heading {
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.step-kicker {
+  color: var(--mes-primary);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+}
+
+.module-registration {
+  padding: 5px 10px;
+  border: 1px solid #fed7aa;
+  border-radius: 999px;
+  color: #b45309;
+  background: #fff7ed;
+  font-size: 12px;
+}
+
+.module-registration.ready {
+  border-color: #bbf7d0;
+  color: #15803d;
+  background: #f0fdf4;
+}
+
+.command-card-title {
+  margin-top: 16px;
+  color: var(--mes-text-title);
+  font-size: 23px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.command-card-subtitle {
+  margin-top: 6px;
+  color: var(--mes-text-sub);
+  font-size: 13px;
+}
+
+.module-target-line {
+  gap: 9px;
+  margin-top: 15px;
+  color: var(--mes-text-sub);
+  font-size: 13px;
+}
+
+.module-target-line strong {
+  color: var(--mes-primary-dark);
+  font-size: 15px;
+}
+
+.matrix-section {
+  margin-top: 24px;
+  padding: 22px 24px 24px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: var(--mes-shadow-card);
+}
+
+.matrix-section-heading {
+  margin-bottom: 15px;
+}
+
+.matrix-section-heading h3 {
+  margin: 5px 0 0;
+  color: var(--mes-text-title);
+  font-size: 17px;
+}
+
+.matrix-help {
+  color: var(--mes-text-faint);
+  font-size: 12px;
+}
+
+.matrix-section .matrix-container {
+  width: 100%;
+}
+
+.matrix-section .matrix {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--mes-border-light);
+  border-radius: 14px;
+  box-shadow: none;
+  background: #f8fafc;
+}
+
+.matrix-section .matrix-row {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.matrix-section .matrix-row:last-child {
+  margin-bottom: 0;
+}
+
+.matrix-section .matrix-cell {
+  width: auto;
+  height: 52px;
+  border-color: #e2e8f0;
+  background: #fff;
+  font-size: 13px;
+}
+
+.matrix-section .matrix-cell.selected {
+  border-color: transparent;
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.32);
+}
+
+@media (max-width: 720px) {
+  .module-command-card,
+  .matrix-section {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .command-card-topline,
+  .matrix-section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .matrix-section .matrix {
+    overflow-x: auto;
+  }
+
+  .matrix-section .matrix-row {
+    min-width: 620px;
+  }
 }
 </style>

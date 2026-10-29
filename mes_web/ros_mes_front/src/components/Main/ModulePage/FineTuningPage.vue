@@ -6,15 +6,30 @@
         <el-button @click="goBack" class="back-button" :icon="ArrowLeft" round>返回</el-button>
         <div>
           <h2 class="mes-page-title">机械臂姿态微调与压力监控</h2>
-          <p class="mes-page-sub">实时下发微调指令，同步编码器 / 压力 / 陀螺仪反馈</p>
+          <p class="mes-page-sub">在已确认的机械臂之间切换，实时调整姿态并查看传感器反馈</p>
         </div>
       </div>
     </div>
     <div class="arm-list">
-      <div class="pointcloud-actions">
-        <el-button type="primary" plain @click="togglePointCloudViews">
-          {{ showPointCloudViews ? "隐藏点云图" : "查看点云图" }}
-        </el-button>
+      <div class="runtime-toolbar">
+        <div class="runtime-context">
+          <span class="context-kicker">运行状态</span>
+          <strong>模块 {{ moduleId }}</strong>
+          <span class="context-divider"></span>
+          <span>当前机械臂</span>
+          <span class="active-arm-chip">机械臂 {{ armNumber(initConfig.unitId) }}</span>
+        </div>
+        <div class="runtime-actions">
+          <el-select v-model="selectedArmRowId" class="arm-switcher" :disabled="busy" placeholder="切换机械臂" @change="handleArmSwitch">
+            <el-option v-for="item in armIdList" :key="item.id" :label="`机械臂 ${armNumber(item.Unit_ID)}`" :value="item.id" />
+          </el-select>
+          <el-button type="primary" plain :disabled="busy" @click="openDrawingDialog">
+            {{ activeProfile?.drawingId ? "重新下发图纸" : "下发图纸" }}
+          </el-button>
+          <el-button type="primary" plain @click="togglePointCloudViews">
+            {{ showPointCloudViews ? "隐藏点云图" : "查看点云图" }}
+          </el-button>
+        </div>
       </div>
 
       <el-card v-if="showPointCloudViews && pointCloudViews.length" shadow="hover" class="pointcloud-card">
@@ -31,14 +46,15 @@
         </div>
       </el-card>
 
-      <el-card shadow="hover" class="main-control-card">
+      <el-card shadow="never" class="main-control-card">
         <template #header>
           <div class="card-header">
-            <span class="header-text"
-              >核心机械臂控制单元 - 机械臂 {{ armList.id }}</span
-            >
-            <el-button type="success" @click="handleSaveConfig"
-              >保存配置</el-button
+            <div class="control-heading">
+              <span class="header-text">姿态控制参数 · 机械臂 {{ armNumber(armList.id) }}</span>
+              <span class="control-caption">图纸 {{ activeProfile?.drawingId || "未下发" }}</span>
+            </div>
+            <el-button type="success" :disabled="busy || !activeProfile?.drawingId" @click="handleSaveConfig"
+              >保存当前配置</el-button
             >
           </div>
         </template>
@@ -54,6 +70,7 @@
                   :min="-360"
                   :max="360"
                   placeholder="顺时针为正"
+                  :disabled="busy || !activeProfile?.drawingId"
                   @change="sendSingleAdjust(0)"
                   @enter="sendSingleAdjust(0)"
                 />
@@ -80,6 +97,7 @@
                   :min="-360"
                   :max="360"
                   placeholder="顺时针为正"
+                  :disabled="busy || !activeProfile?.drawingId"
                   @change="sendSingleAdjust(1)"
                 />
               </div>
@@ -105,6 +123,7 @@
                   :min="-360"
                   :max="360"
                   placeholder="顺时针为正"
+                  :disabled="busy || !activeProfile?.drawingId"
                   @change="sendSingleAdjust(2)"
                 />
               </div>
@@ -159,55 +178,62 @@
     </div>
 
     <el-dialog
+      class="initial-config-dialog"
       v-model="initDialogVisible"
-      title="目标图纸下发"
+      :title="dialogMode === 'initial' ? '确认机械臂并下发图纸' : '重新下发图纸'"
       width="450px"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
       :show-close="false"
     >
-      <el-form label-width="100px">
-        <el-form-item label="已选模块">
+      <div class="dialog-intro">
+        <div class="dialog-intro-icon">⌁</div>
+        <div>
+          <strong>{{ dialogMode === "initial" ? "建立本次微调会话" : "更新当前机械臂图纸" }}</strong>
+          <p>{{ dialogMode === "initial" ? "先确认需要参与本模块的机械臂，再统一下发目标图纸。" : "重新下发图纸只作用于当前机械臂。" }}</p>
+        </div>
+      </div>
+      <el-form label-position="top" class="config-form">
+        <el-form-item label="目标模块">
           <el-input :model-value="moduleDisplay" disabled />
         </el-form-item>
-        <el-form-item label="机械臂" required>
-          <el-select
-            v-model="initConfig.unitRowId"
-            placeholder="请选择机械臂"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="item in armIdList"
-              :key="item.id"
-              :label="formatUnitOption(item)"
-              :value="item.id"
-            />
-          </el-select>
+        <el-form-item label="参与机械臂" required>
+          <div class="dialog-arm-picker">
+            <div class="dialog-field-meta">
+              <span>选择本次要操作的机械臂</span>
+              <b>{{ draftInitConfig.unitRowIds.length }} / 5</b>
+            </div>
+            <el-checkbox-group
+              v-model="draftInitConfig.unitRowIds"
+              class="dialog-arm-grid"
+              :max="5"
+              :disabled="dialogMode !== 'initial'"
+            >
+              <el-checkbox-button v-for="item in armIdList" :key="item.id" :label="item.id" class="dialog-arm-card">
+                <span>机械臂 {{ armNumber(item.Unit_ID) }}</span>
+                <small>Unit_ID {{ item.Unit_ID }}</small>
+              </el-checkbox-button>
+            </el-checkbox-group>
+          </div>
         </el-form-item>
-        <el-form-item label="图纸" required>
-          <el-select
-            v-model="initConfig.drawingId"
-            placeholder="请选择图纸"
-            style="width: 100%"
-          >
-            <el-option
-              v-for="item in drawingList"
-              :key="item.drawingId"
-              :label="item.drawingName"
-              :value="item.drawingId"
-            />
+        <el-form-item label="目标图纸" required>
+          <el-select v-model="draftInitConfig.drawingId" placeholder="请选择目标图纸" style="width: 100%">
+            <el-option v-for="item in drawingList" :key="item.drawingId" :label="item.drawingName" :value="item.drawingId" />
           </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button type="primary" @click="confirmInitConfig">确定并关闭</el-button>
+        <el-button @click="handleDialogCancel">
+          {{ dialogMode === "initial" ? "返回模块选择" : "取消" }}
+        </el-button>
+        <el-button type="primary" :loading="busy" :disabled="busy" @click="confirmInitConfig">确认并下发</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onBeforeUnmount } from "vue";
+import { ref, reactive, computed, onMounted, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { ArrowLeft } from "@element-plus/icons-vue";
@@ -215,6 +241,7 @@ import {
   getDrawingListApi,
   getUnitsByDeviceApi,
   getSensorsByUnitApi,
+  createModule,
   sendCoordination,
   sendFineTuning,
   saveFineTuningConfig,
@@ -229,8 +256,8 @@ import {
 
 const router = useRouter();
 
-// 页面进入后强制先完成目标图纸下发配置
-const initDialogVisible = ref(true);
+// 数据准备完成后再打开配置弹窗，避免接口加载期间短暂显示空表单。
+const initDialogVisible = ref(false);
 const initConfig = reactive({
   deviceId: 0,
   unitId: 0,
@@ -238,8 +265,18 @@ const initConfig = reactive({
   sensorId: 0,
   drawingId: 0,
 });
+const draftInitConfig = reactive({
+  unitRowIds: [] as number[],
+  unitRowId: 0,
+  unitId: 0,
+  drawingId: 0,
+});
+const dialogMode = ref<"initial" | "redraw">("initial");
+const sharedDrawingId = ref(0);
+const sharedDrawingViews = ref<Array<{ name: string; label: string; url: string }>>([]);
 
-var loading = ref(false);
+const loading = ref(false);
+const busy = ref(false);
 let feedbackSocket: WebSocket | null = null;
 const armIdList = ref<any[]>([]);
 const drawingList = ref<any[]>([]);
@@ -248,6 +285,11 @@ const showPointCloudViews = ref(false);
 const route = useRoute();
 const moduleId = ref<number>(0);
 const moduleDisplay = ref("");
+const selectedArmRowId = ref(0);
+const armProfiles = reactive<Record<string, any>>({});
+const activeProfile = computed(() =>
+  initConfig.unitRowId ? armProfiles[String(initConfig.unitRowId)] || null : null
+);
 const armList = reactive({
   id: 0,
   // deviceId 由 applyAxisEncoding 按 V2 轴号编码动态填充（1~20 轴级 / 21~25 臂级），禁止硬编码
@@ -271,6 +313,13 @@ const formatUnitOption = (item: any) => {
   return `机械臂 ${item.Unit_ID}${desc}`;
 };
 
+const armNumber = (unitId: number) => {
+  const value = Number(unitId);
+  if (value >= 1 && value <= 5) return value;
+  if (value > 0 && value % 32 === 0) return value / 32;
+  return value;
+};
+
 const adjustmentKeys: AxisParameterName[] = ["rotation", "swing", "telescopic"];
 // 反馈 device_id → 轴下标映射：按选中机械臂的 V2 轴号动态构建，见 rebuildFeedbackIndex
 let feedbackDeviceIndex: Record<number, number> = {};
@@ -278,6 +327,54 @@ let feedbackDeviceIndex: Record<number, number> = {};
 let armLevelId = 0;
 let lastLoadedUnitRowId = 0;
 const pressureSensorId = ref<number>(0);
+
+const cloneDevices = () => armList.device.map((item: any) => ({ ...item }));
+
+const saveActiveProfile = (force = false) => {
+  if (!initConfig.unitRowId || !initConfig.drawingId) return;
+  const existingProfile = armProfiles[String(initConfig.unitRowId)];
+  if (!force && !existingProfile?.configured) return;
+  armProfiles[String(initConfig.unitRowId)] = {
+    unitRowId: Number(initConfig.unitRowId),
+    unitId: Number(initConfig.unitId),
+    drawingId: Number(initConfig.drawingId),
+    configured: true,
+    device: cloneDevices(),
+    imu: { ...imuFeedback },
+    pressureSensorId: Number(pressureSensorId.value || 0),
+    pointCloudViews: pointCloudViews.value.map((item) => ({ ...item })),
+    showPointCloudViews: Boolean(showPointCloudViews.value),
+  };
+};
+
+const resetControlState = () => {
+  armList.device.forEach((item: any, index: number) => {
+    item.initial = 0;
+    item.adjust = index < 3 ? 0 : undefined;
+    item.current = 0;
+    item.initialLocked = false;
+  });
+  Object.assign(imuFeedback, { swingAngle: 0, rotationAngle: 0, x: 0, y: 0, z: 0 });
+  pressureSensorId.value = 0;
+  pointCloudViews.value = [];
+  showPointCloudViews.value = false;
+  loading.value = false;
+};
+
+const restoreArmProfile = (profile: any) => {
+  initConfig.unitRowId = Number(profile.unitRowId);
+  initConfig.unitId = Number(profile.unitId);
+  initConfig.drawingId = Number(profile.drawingId);
+  armList.device.splice(0, armList.device.length, ...profile.device.map((item: any) => ({ ...item })));
+  Object.assign(imuFeedback, profile.imu || {});
+  pressureSensorId.value = Number(profile.pressureSensorId || 0);
+  pointCloudViews.value = (profile.pointCloudViews || []).map((item: any) => ({ ...item }));
+  showPointCloudViews.value = Boolean(profile.showPointCloudViews);
+  applyAxisEncoding(initConfig.unitId);
+  armList.id = initConfig.unitId;
+  lastLoadedUnitRowId = initConfig.unitRowId;
+  loading.value = true;
+};
 
 // 依据机械臂 Unit_ID（32/64/96 → 臂1/2/3）计算 V2 轴号，填充三轴与臂级 deviceId
 const applyAxisEncoding = (unitId: number) => {
@@ -391,6 +488,9 @@ const applyFeedback = (feedback: any) => {
   }
 
   if (feedback.data_type === "pressure_sensor") {
+    if (Number(feedback.device_id) !== Number(armLevelId)) {
+      return;
+    }
     if (!Number.isFinite(position)) {
       return;
     }
@@ -400,6 +500,9 @@ const applyFeedback = (feedback: any) => {
   }
 
   if (feedback.data_type === "imu_pose") {
+    if (Number(feedback.device_id) !== Number(armLevelId)) {
+      return;
+    }
     applyImuFeedback(feedback);
   }
 };
@@ -435,72 +538,157 @@ const connectFeedbackSocket = () => {
   };
 };
 
-const confirmInitConfig = async () => {
-  const selectedUnit = armIdList.value.find(
-    (item: any) => Number(item.id) === Number(initConfig.unitRowId)
-  );
+const openDrawingDialog = () => {
+  dialogMode.value = "redraw";
+  draftInitConfig.unitRowIds = [Number(initConfig.unitRowId)];
+  draftInitConfig.unitRowId = Number(initConfig.unitRowId || selectedArmRowId.value || armIdList.value[0]?.id || 0);
+  draftInitConfig.unitId = Number(armIdList.value.find((item: any) => Number(item.id) === draftInitConfig.unitRowId)?.Unit_ID || 0);
+  draftInitConfig.drawingId = Number(initConfig.drawingId || drawingList.value[0]?.drawingId || 0);
+  initDialogVisible.value = true;
+};
 
-  if (!selectedUnit) {
-    ElMessage.warning("必须选择一个机械臂才能继续");
+const handleDialogCancel = () => {
+  if (dialogMode.value === "redraw" && initConfig.unitRowId && activeProfile.value?.drawingId) {
+    selectedArmRowId.value = Number(initConfig.unitRowId);
+    initDialogVisible.value = false;
     return;
   }
+  goBack();
+};
 
-  if (!initConfig.drawingId) {
+const handleArmSwitch = async (rowId: number) => {
+  if (busy.value || Number(rowId) === Number(initConfig.unitRowId)) return;
+  const target = armIdList.value.find((item: any) => Number(item.id) === Number(rowId));
+  if (!target) return;
+  saveActiveProfile();
+  const profile = armProfiles[String(rowId)];
+  selectedArmRowId.value = Number(rowId);
+  if (profile?.configured) {
+    restoreArmProfile(profile);
+    return;
+  }
+  // 切换到本次已确认但尚未操作过的机械臂时，直接继承首次下发的图纸。
+  // 机械臂切换是运行态状态切换，不重新打开初始化弹窗。
+  resetControlState();
+  initConfig.unitRowId = Number(rowId);
+  initConfig.unitId = Number(target.Unit_ID);
+  initConfig.drawingId = Number(sharedDrawingId.value || drawingList.value[0]?.drawingId || 0);
+  pointCloudViews.value = sharedDrawingViews.value.map((item) => ({ ...item }));
+  applyAxisEncoding(initConfig.unitId);
+  armList.id = initConfig.unitId;
+  busy.value = true;
+  try {
+    await loadSensorsForUnit(initConfig.unitRowId);
+    saveActiveProfile(true);
+  } finally {
+    busy.value = false;
+  }
+};
+
+const confirmInitConfig = async () => {
+  if (busy.value) return;
+  const selectedRowIds = dialogMode.value === "initial"
+    ? [...draftInitConfig.unitRowIds]
+    : [Number(draftInitConfig.unitRowId)];
+  if (selectedRowIds.length === 0 || selectedRowIds.length > 5) {
+    ElMessage.warning("请选择 1-5 台机械臂");
+    return;
+  }
+  if (!draftInitConfig.drawingId) {
     ElMessage.warning("必须选择一张图纸才能继续");
     return;
   }
 
-  initConfig.unitId = Number(selectedUnit.Unit_ID);
-
-  // 用户切换机械臂时按新臂号重算 V2 轴号，并刷新压力传感器 ID
-  applyAxisEncoding(initConfig.unitId);
-  if (Number(initConfig.unitRowId) !== lastLoadedUnitRowId) {
-    await loadSensorsForUnit(Number(initConfig.unitRowId));
-    lastLoadedUnitRowId = Number(initConfig.unitRowId);
+  const selectedUnits = selectedRowIds
+    .map((rowId) => armIdList.value.find((item: any) => Number(item.id) === Number(rowId)))
+    .filter(Boolean);
+  if (selectedUnits.length !== selectedRowIds.length) {
+    ElMessage.warning("所选机械臂已不可用，请重新选择");
+    return;
   }
 
-  const payload = {
-    device_id: Number(initConfig.deviceId),
-    module_id: Number(moduleId.value),
-    unit_id: Number(selectedUnit.Unit_ID),
-    unit_row_id: Number(selectedUnit.id),
-    drawing_id: Number(initConfig.drawingId),
-  };
-
-  console.log("目标图纸下发提交数据：", payload);
-
+  busy.value = true;
   try {
-    const res: any = await sendCoordination(payload);
+    let confirmedUnits = selectedUnits;
+    if (dialogMode.value === "initial") {
+      const qX = Number(route.query.x || 0);
+      const qY = Number(route.query.y || 0);
+      const moduleRes: any = await createModule({
+        x: qX,
+        y: qY,
+        module_id: Number(moduleId.value),
+        device_id: Number(initConfig.deviceId),
+        unit_ids: selectedUnits.map((item: any) => Number(item.Unit_ID)),
+        position: 0,
+      });
+      if (!moduleRes || moduleRes.code !== 200) {
+        throw new Error(moduleRes?.message || moduleRes?.msg || "机械臂模块确认失败");
+      }
+      const confirmedIds = Array.isArray(moduleRes.data?.confirmations)
+        ? moduleRes.data.confirmations.map((item: any) => Number(item.unit_id))
+        : selectedUnits.map((item: any) => Number(item.Unit_ID));
+      confirmedUnits = selectedUnits.filter((item: any) => confirmedIds.includes(Number(item.Unit_ID)));
+      if (confirmedUnits.length === 0) {
+        throw new Error("没有机械臂确认成功");
+      }
+      armIdList.value = confirmedUnits;
+    }
 
-    console.log("目标图纸下发返回：", res);
+    const drawingId = Number(draftInitConfig.drawingId);
+    let firstDrawingResponse: any = null;
+    for (const unit of confirmedUnits) {
+      const response: any = await sendCoordination({
+        device_id: Number(initConfig.deviceId),
+        module_id: Number(moduleId.value),
+        unit_id: Number(unit.Unit_ID),
+        unit_row_id: Number(unit.id),
+        drawing_id: drawingId,
+      });
+      if (!response || response.code !== 200) {
+        throw new Error(response?.message || response?.msg || `机械臂 ${unit.Unit_ID} 图纸下发失败`);
+      }
+      firstDrawingResponse ||= response;
+    }
 
-    if (res && res.code === 200) {
-      ElMessage.success("目标图纸下发成功");
-      initDialogVisible.value = false;
+    const activeUnit = confirmedUnits[0];
+    if (dialogMode.value === "initial") {
+      resetControlState();
+      initConfig.unitRowId = Number(activeUnit.id);
+      initConfig.unitId = Number(activeUnit.Unit_ID);
+      selectedArmRowId.value = initConfig.unitRowId;
+      applyAxisEncoding(initConfig.unitId);
+      await loadSensorsForUnit(initConfig.unitRowId);
+      lastLoadedUnitRowId = initConfig.unitRowId;
       armList.id = initConfig.unitId;
       loading.value = true;
-      const viewLabels: Record<string, string> = {
-        top: "俯视图",
-        front: "正视图",
-        side: "侧视图",
-      };
-      const timestamp = Date.now();
-      pointCloudViews.value = Object.entries(res.views || {}).map(([name, url]) => ({
-        name,
-        label: viewLabels[name] || name,
-        url: `${url}${String(url).includes("?") ? "&" : "?"}t=${timestamp}`,
-      }));
-      showPointCloudViews.value = false;
-    } else {
-      ElMessage.error(res?.message || res?.msg || "目标图纸下发失败");
     }
+    initConfig.drawingId = drawingId;
+    // 初次建立会话时，图纸才是所有已确认机械臂的共享默认值。
+    // 重新下发只更新当前机械臂，避免影响尚未切换到的机械臂。
+    if (dialogMode.value === "initial") {
+      sharedDrawingId.value = drawingId;
+    }
+
+    const viewLabels: Record<string, string> = { top: "俯视图", front: "正视图", side: "侧视图" };
+    const timestamp = Date.now();
+    const dispatchedViews = Object.entries(firstDrawingResponse?.views || {}).map(([name, url]) => ({
+      name,
+      label: viewLabels[name] || name,
+      url: `${url}${String(url).includes("?") ? "&" : "?"}t=${timestamp}`,
+    }));
+    pointCloudViews.value = dispatchedViews;
+    if (dialogMode.value === "initial") {
+      sharedDrawingViews.value = dispatchedViews.map((item) => ({ ...item }));
+    }
+    showPointCloudViews.value = false;
+    saveActiveProfile(true);
+    initDialogVisible.value = false;
+    ElMessage.success(`已确认 ${confirmedUnits.length} 台机械臂并完成图纸下发`);
   } catch (err: any) {
-    console.error("目标图纸下发失败：", err.response?.data || err);
-    ElMessage.error(
-      err.response?.data?.detail ||
-        err.response?.data?.message ||
-        "目标图纸下发失败，请检查后端服务"
-    );
+    console.error("机械臂确认或图纸下发失败：", err.response?.data || err);
+    ElMessage.error(err.response?.data?.detail || err.message || "机械臂确认或图纸下发失败");
+  } finally {
+    busy.value = false;
   }
 };
 // 单个机械臂微调：不改变 Unit_ID，只记录参数名和调整值
@@ -621,7 +809,6 @@ onMounted(async () => {
   const qDeviceId = route.query.device_id ?? route.query.Device_ID;
   const qX = route.query.x;
   const qY = route.query.y;
-  const qUnitIds = route.query.unit_ids;
 
   if (qModuleId) {
     moduleId.value = parseInt(qModuleId as string);
@@ -654,20 +841,10 @@ onMounted(async () => {
         ? drawingRes.data
         : [];
 
-    const confirmedUnitIds = String(qUnitIds || "")
-      .split(",")
-      .map((value) => Number(value.trim()))
-      .filter((value) => Number.isFinite(value));
+    // 机械臂由微调页首次配置弹窗统一选择。忽略旧版本链接携带的 unit_ids，
+    // 避免历史路由参数把可选机械臂过滤为空。
     const availableUnits = units.filter((item: any) => Number.isFinite(Number(item.id)));
-    armIdList.value = confirmedUnitIds.length > 0
-      ? availableUnits.filter((item: any) => confirmedUnitIds.includes(Number(item.Unit_ID)))
-      : availableUnits;
-
-    if (confirmedUnitIds.length > 0 && armIdList.value.length === 0) {
-      ElMessage.warning("未找到本次确认成功的机械臂，请返回模块管理页重新确认");
-      router.push("/moduleManagement");
-      return;
-    }
+    armIdList.value = availableUnits;
     drawingList.value = drawings.filter((item: any) => Number.isFinite(Number(item.drawingId)));
 
     if (armIdList.value.length === 0) {
@@ -684,13 +861,20 @@ onMounted(async () => {
 
     initConfig.unitRowId = Number(armIdList.value[0].id);
     initConfig.unitId = Number(armIdList.value[0].Unit_ID);
+    initConfig.drawingId = 0;
+    selectedArmRowId.value = initConfig.unitRowId;
     // 按 V2 轴号编码填充三轴/臂级 deviceId，并拉取压力传感器 sensor_ID
     applyAxisEncoding(initConfig.unitId);
     lastLoadedUnitRowId = initConfig.unitRowId;
     await loadSensorsForUnit(initConfig.unitRowId);
-    initConfig.drawingId = Number(drawingList.value[0].drawingId);
+    dialogMode.value = "initial";
+    draftInitConfig.unitRowIds = [];
+    draftInitConfig.unitRowId = initConfig.unitRowId;
+    draftInitConfig.unitId = initConfig.unitId;
+    draftInitConfig.drawingId = Number(drawingList.value[0].drawingId);
     armList.id = initConfig.unitId;
     connectFeedbackSocket();
+    initDialogVisible.value = true;
   } catch (err: any) {
     console.error("初始化机械臂或图纸列表失败：", err.response?.data || err);
     ElMessage.error("初始化机械臂或图纸列表失败");
@@ -719,6 +903,9 @@ onBeforeUnmount(() => {
 }
 .fine-tuning-container {
   overflow: auto;
+  background:
+    radial-gradient(circle at 88% 8%, rgba(37, 99, 235, 0.08), transparent 30%),
+    #eef3f8;
 }
 
 .header-left {
@@ -743,21 +930,74 @@ onBeforeUnmount(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  margin-top: 20px;
-  gap: 20px;
+  margin-top: 24px;
+  gap: 16px;
 }
 
 .main-control-card {
-  width: 750px;
-  border-radius: 12px;
-  border: none;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.05) !important;
+  width: min(100%, 900px);
+  border-radius: 16px;
+  border: 1px solid #dce6f0;
+  box-shadow: 0 16px 36px rgba(15, 39, 67, 0.08) !important;
 }
 
-.pointcloud-actions {
+.runtime-toolbar {
   width: min(100%, 980px);
+  box-sizing: border-box;
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid #d9e4ef;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 8px 24px rgba(15, 39, 67, 0.06);
+}
+
+.runtime-context,
+.runtime-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.runtime-context {
+  color: #526274;
+  font-size: 13px;
+}
+
+.runtime-context strong {
+  color: #102a43;
+  font-size: 15px;
+}
+
+.context-kicker {
+  color: #718096;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.context-divider {
+  width: 1px;
+  height: 18px;
+  background: #d7e0e9;
+}
+
+.active-arm-chip {
+  padding: 5px 10px;
+  border: 1px solid #b8e3d6;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #087f5b;
+  font-weight: 600;
+}
+
+.arm-switcher {
+  width: 190px;
 }
 
 .pointcloud-card {
@@ -804,6 +1044,23 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+}
+
+.control-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.control-caption {
+  padding-left: 12px;
+  border-left: 1px solid #d9e4ef;
+  color: #718096;
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 .header-text {
@@ -812,10 +1069,115 @@ onBeforeUnmount(() => {
   color: #303133;
 }
 
+.config-form :deep(.el-form-item__label) {
+  color: #425466;
+  font-weight: 650;
+}
+
+.dialog-intro {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  border: 1px solid #cfe4f5;
+  border-radius: 12px;
+  background: #f2f8fc;
+}
+
+.dialog-intro-icon {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 9px;
+  background: #0f5b78;
+  color: #fff;
+  font-size: 18px;
+}
+
+.dialog-intro strong {
+  color: #153b50;
+  font-size: 15px;
+}
+
+.dialog-intro p {
+  margin: 4px 0 0;
+  color: #6a7d8d;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.dialog-arm-picker {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e1e8ef;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.dialog-field-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  color: #788797;
+  font-size: 12px;
+}
+
+.dialog-field-meta b {
+  color: #0f5b78;
+}
+
+.dialog-arm-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dialog-arm-card {
+  width: 100%;
+  margin: 0 !important;
+}
+
+.dialog-arm-card :deep(.el-checkbox-button__inner) {
+  display: flex;
+  min-height: 60px;
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #d7e1ea !important;
+  border-radius: 9px !important;
+  background: #fff;
+  box-shadow: none !important;
+  color: #425466;
+  text-align: left;
+}
+
+.dialog-arm-card.is-checked :deep(.el-checkbox-button__inner) {
+  border-color: #168aad !important;
+  background: #e8f7fb;
+  color: #0f5b78;
+}
+
+.dialog-arm-card small {
+  margin-top: 3px;
+  color: #8a9aab;
+  font-size: 10px;
+}
+
+@media (max-width: 700px) {
+  .dialog-arm-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 .control-grid {
   display: flex;
   flex-direction: column;
-  gap: 30px;
+  gap: 18px;
   padding: 10px 20px;
 }
 
@@ -894,6 +1256,24 @@ onBeforeUnmount(() => {
 @media (max-width: 900px) {
   .imu-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .control-caption {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .runtime-actions,
+  .runtime-actions .arm-switcher,
+  .runtime-actions .el-button {
+    width: 100%;
   }
 }
 

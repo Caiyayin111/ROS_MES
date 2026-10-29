@@ -14,7 +14,7 @@
 
 | 目录 | 说明 | 技术栈 |
 |---|---|---|
-| `mes_web/` | 前后端总目录（本团队负责） | — |
+| `mes_web/` | 前后端总目录 | — |
 | `mes_web/ros_mes_front/` | Web 前端 | Vue 3 · TypeScript · Vite · Element Plus · Pinia |
 | `mes_web/ros_mes_hou/` | 业务后端 | FastAPI · SQLAlchemy · SQLite · rosbridge-websocket |
 | `robot_control_backend/` | ROS 机器人控制节点 | ROS · Python |
