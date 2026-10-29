@@ -67,6 +67,10 @@ find_package(catkin REQUIRED COMPONENTS
  AxisFault.msg
  LimitEvent.msg
  VacuumLoss.msg
+ UidAnnounce.msg
+ SegAssign.msg
+ SegConfirm.msg
+ ModuleStatus.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -213,6 +217,9 @@ catkin_install_python(PROGRAMS
   scripts/swing_node.py
   scripts/telescopic_node.py
   scripts/hardware_node.py
+  scripts/zlg_bus.py
+  scripts/sim_lower_machine.py
+  scripts/rosbridge_wrapper.py
   scripts/softstop_node.py
   scripts/control_node.py
   scripts/tuo_luo_yi.py

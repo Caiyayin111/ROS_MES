@@ -214,15 +214,14 @@ def split_into_modules(points):
                 continue
 
             arm_x = x0 + 5
-            arm_y1 = y0 + 5
-            arm_y2 = y0 + 15
-            arm_y3 = y0 + 25
             module_id = (i + 1) * 16 + (j + 1)
+            # 5 臂均分模块 Y 向尺寸，臂基座落在各等分区间中点
+            arms = [[arm_x, y0 + MODULE_SIZE_Y * (k + 0.5) / 5.0, 0] for k in range(5)]
 
             modules.append({
                 "module_id": module_id,
                 "points": seg.tolist(),
-                "arms": [[arm_x, arm_y1, 0], [arm_x, arm_y2, 0], [arm_x, arm_y3, 0]]
+                "arms": arms
             })
     return modules
 
@@ -246,7 +245,11 @@ def json_callback(msg):
         json_data = json.loads(msg.data)
         file_path = json_data.get("file_path")
         if file_path:
-            # 从图纸文件读取点云
+            # 从图纸文件读取点云；后端下发的是相对 scripts 目录的路径，
+            # roslaunch 会把节点 cwd 切到 ~/.ros，这里必须显式按 scripts 目录解析
+            if not os.path.isabs(file_path):
+                file_path = os.path.abspath(
+                    os.path.join(os.path.dirname(__file__), file_path))
             rospy.loginfo(f"📂 收到图纸路径: {file_path}")
             if not os.path.exists(file_path):
                 rospy.logerr(f"❌ 图纸文件不存在: {file_path}")
