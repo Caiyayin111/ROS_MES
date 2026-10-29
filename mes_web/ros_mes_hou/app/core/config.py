@@ -44,6 +44,9 @@ class Settings:
     # 模块确认会话式握手的回执等待上限。
     # ROS 端 V2.1：等宣告窗口 30s（含操作员上电）+ 确认重试，后端必须 ≥35s，否则必然 502
     MODULE_CONFIRM_ACK_WAIT_S: float = float(os.getenv("ROS_MODULE_CONFIRM_ACK_WAIT_S", "35.0"))
+    # 业务 module_id 到 ROS 下位机 SEG(0~14) 的显式映射。
+    # 不允许根据业务模块号猜 SEG；部署时请按现场模块表覆盖此 JSON。
+    ROS_MODULE_SEG_MAP: str = os.getenv("ROS_MODULE_SEG_MAP", '{"17": 0}')
     BACKEND_CORS_ORIGINS: List[str] = [
         origin.strip()
         for origin in os.getenv("BACKEND_CORS_ORIGINS", "*").split(",")

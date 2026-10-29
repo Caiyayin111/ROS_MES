@@ -97,7 +97,10 @@
 | 3 | `/module/` | POST | 否（白名单） | `/control/module_cmd` (IntCmd) | 锁定目标模块并下发确认指令 |
 
 **接口 3：模块锁定下发**
-- 请求体（支持多种字段名，兼容前端不同版本）：
+
+当前页面调用时机：模块管理页只选模块并导航，不下发确认；微调页首次配置弹窗可选择 1~5 台机械臂和一张图纸，先调用本接口（`unit_ids` 为所选 `Unit_ID` 数组），确认成功后再为每台确认成功的机械臂调用 §2.3 的图纸下发接口。微调主页面只在本次确认成功的机械臂之间切换；后端仍支持多个 `unit_ids` 的顺序确认。
+
+- 请求体（业务层字段；ROS 的 `seg/arm/position` 不由前端传递）：
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
@@ -105,6 +108,7 @@
 | `y` | int | ✔（或别名） | Y 坐标 (1~8)；别名 `Y/targetY/moduleY/row` 或 `position.y` |
 | `module_id` | int | 可选 | 默认 `x*16+y` |
 | `device_id` | int | 可选 | 设备 ID |
+| `unit_ids` | int[] | ✔ | 本次确认的机械臂 `Unit_ID` 列表；页面可传 1~5 台，后端按顺序逐个确认 |
 | `position` | int | 可选 | 位置（前端传 0）；也可传对象 `{x, y}` |
 
 - 响应：
@@ -113,18 +117,32 @@
 {
   "code": 200,
   "message": "module locked and confirmation command dispatched",
-  "data": { "x": 1, "y": 2, "module_id": 18, "device_id": 1, "position": 0, "raw": {} },
+  "data": {
+    "x": 1, "y": 2, "module_id": 18, "device_id": 1,
+    "unit_ids": [32, 64, 96], "position": 0, "raw": {}, "seg": 0,
+    "confirmations": [
+      {"unit_id": 32, "arm": 1, "confirmed": true},
+      {"unit_id": 64, "arm": 2, "confirmed": true},
+      {"unit_id": 96, "arm": 3, "confirmed": true}
+    ]
+  },
   "dispatch": {
-    "sent": true, "mode": "rosbridge", "action": "module_confirm",
-    "confirmed": true/false, "confirm_topic": "/hardware/module_confirm_success"
+    "action": "module_confirm", "confirmed": true, "count": 3,
+    "confirmations": [
+      {"unit_id": 32, "arm": 1, "confirmed": true},
+      {"unit_id": 64, "arm": 2, "confirmed": true},
+      {"unit_id": 96, "arm": 3, "confirmed": true}
+    ]
   }
 }
 ```
 
-- ROS 消息（IntCmd）：`module_id`（业务模块号，无范围限制，ROS 端原样回执）、`device_id=0`（模块级指令）、`position=[100, station]`（V2.1 会话式握手：100=触发，station=工位号 1~15）
-  - V2.1 契约（三轴版清单 §6/§7.2）：station=工位号 1~15，由操作员选择确认第几组，**前端必须显式传 `station` 字段**，后端不做默认推导
+如果某台机械臂确认失败，接口返回 HTTP 502，`detail` 中包含 `failed_unit_id`、`failed_arm`、已确认的 `confirmed_unit_ids`、尚未处理的 `pending_unit_ids` 和 `reason`；后端不会继续下发后续机械臂。
+
+- ROS 消息（IntCmd）：`module_id`（业务模块号，无范围限制，ROS 端原样回执）、`device_id=0`（当前 ROS 模块级指令固定值）、`position=[100, seg, arm]`（100=触发；`seg` 由后端 `ROS_MODULE_SEG_MAP` 从业务 `module_id` 映射；`arm` 由 `unit_id` 映射为 1~5）
+- 业务接口不使用 `station`、`seg` 或 ROS `arm` 字段。后端按 `unit_ids` 逐个下发；同一时间只确认一台未绑定机械臂。`ROS_MODULE_SEG_MAP` 缺少目标模块映射，或 `unit_id` 无法映射为 1~5 的 ROS `arm` 时，直接返回 422。
 - 确认机制：发布后订阅 `/hardware/module_confirm_success` 与 `/hardware/web_module_cmd`；回包 `module_id` 原样返回、`position[0]==100` 成功、`position[0]==1` 失败（HTTP 502）
-- x/y 缺失 → 422；缺 station → 422；station 越界 → 422
+- x/y 缺失、`unit_ids` 为空、模块 SEG 映射缺失或映射出的 `arm` 不在 1~5 → 422
 
 ---
 
@@ -149,6 +167,8 @@
 - 响应：`{"code":200, "message":"target drawing path dispatched and pointcloud views are ready", "data":{五元组}, "dispatch":{...}, "views":{"front":"/api/coordination/views/front","side":"...","top":"..."}}`
 - ROS 消息（std_msgs/String）：`data` = JSON 字符串 `{"file_path": "相对 robot_control_backend/scripts 的图纸路径"}`
 - 流程：校验参数 → 查库取图纸路径 → 转相对路径 → rosbridge 发布 → 等待点云三视图生成（最长 5 秒，超时 504）
+
+页面顺序为“选模块 → 多选 1~5 台机械臂和一张图纸 → 批量机械臂确认 → 按臂图纸下发 → 微调”。全部确认和图纸下发成功后进入微调页；主页面提供机械臂切换和重新下发图纸入口，已确认机械臂的图纸、三视图和微调状态按臂分别保留于本次页面会话中。切换机械臂不会再次弹出选择框；重新下发只作用于当前机械臂。请求进行中禁用目标切换，避免数据串臂。
 
 **接口 5：点云视图代理**
 - 路径参数：`view_name` ∈ {`top`, `front`, `side`}（其他值 404）
@@ -378,7 +398,7 @@ uint16 device_id          # 寻址单元 AXIS：
 int32[] position          # 位置/数据数组
 ```
 
-使用场景：模块确认（`/control/module_cmd`，V2.1 起 `position=[100, station]`，见第 2 节）、急停（`/control/softstop`，`module_id=0, device_id=0, position=[0x01]`）、压力触发（`/control/sensor_cmd`）、指令汇聚（`/arm/cmd_vel`）。
+使用场景：模块确认（`/control/module_cmd`，新契约 `position=[100, seg, arm]`，见第 2 节）、急停（`/control/softstop`，`module_id=0, device_id=0, position=[0x01]`）、压力触发（`/control/sensor_cmd`）、指令汇聚（`/arm/cmd_vel`）。
 
 ### 5.2 RotationCmd.msg —— 旋转轴指令/反馈
 
@@ -743,7 +763,7 @@ SQLite（`ros_database.db`，项目根），17 张表，模型在 `app/db/models
 
 - ROS1 / ROS2 的适配器分别为 `app/ros/ros1/Ros1Dispatcher`、`app/ros/ros2/Ros2Dispatcher`，共用 `app/ros/rosbridge.py` 传输层；本文档第 4、5 节记录的话题与消息格式即 ROS1 现网契约，ROS2 端移植定稿后由 ROS 端同步确认差异表。
 - 急停 `/control/softstop` 沿用现网 typeless publish（不带 advertise/type）；若 ROS2 端收不到，再补 `advertise`。
-- ~~已知协议不一致①：模块确认失败码~~ **已解决**——ROS 端 V2.1（`module_confirme_node.py`）已把 `RESULT_FAILED` 对齐为 `1`，与后端/文档一致；同时握手升级为会话式 `position=[100, station]`（见第 2 节）。
+- ~~已知协议不一致①：模块确认失败码~~ **已解决**——ROS 端已把 `RESULT_FAILED` 对齐为 `1`，与后端/文档一致；当前握手下行使用 `position=[100, seg, arm]`（见第 2 节），业务接口不再使用 `station`。
 - ~~已知协议不一致②：图纸路径话题~~ **已闭环（2026-10-25，以三轴版清单为准）**——后端发布的 `/frontend_pointcloud_topic`（无前缀）即为准；ROS 端已推送的 `rob_arm.env` 中 `ROS_TOPIC_FRONTEND_POINTCLOUD=/control/frontend_pointcloud_topic` 与清单矛盾，由 ROS 端修正其 env，后端不预留改动（必要时可用 `ROS_TOPIC_DRAWING_PATH` 环境变量覆盖）。
 
 ---

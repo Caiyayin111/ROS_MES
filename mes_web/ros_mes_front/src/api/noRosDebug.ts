@@ -24,15 +24,14 @@ export function getNoRosDebugDeviceList() {
 }
 
 export function getNoRosDebugUnitsByDevice(deviceId: number) {
+  const armIds = [32, 64, 96, 128, 160];
   return mockSuccess(
-    [
-      {
-        id: deviceId * 10 + 1,
-        Unit_ID: 1,
-        Device_ID: deviceId,
-        UnitDescript: "NO_ROS_DEBUG 默认机械臂",
-      },
-    ],
+    armIds.map((unitId, index) => ({
+      id: deviceId * 10 + index + 1,
+      Unit_ID: unitId,
+      Device_ID: deviceId,
+      UnitDescript: `NO_ROS_DEBUG ${index + 1}号机械臂`,
+    })),
     "NO_ROS_DEBUG: 模拟机械臂列表"
   );
 }
@@ -60,9 +59,16 @@ export function getNoRosDebugDrawingList() {
 }
 
 export function createNoRosDebugModule(data: any) {
+  const unitIds = Array.isArray(data?.unit_ids) ? data.unit_ids.map(Number) : [];
   return mockSuccess(
     {
       ...data,
+      confirmations: unitIds.map((unitId: number) => ({
+        unit_id: unitId,
+        arm: unitId >= 1 && unitId <= 5 ? unitId : Math.floor(unitId / 32),
+        confirmed: true,
+        dispatch: { sent: true, mode: "NO_ROS_DEBUG", confirmed: true },
+      })),
       debug: true,
     },
     "NO_ROS_DEBUG: 模块锁定模拟成功"
@@ -82,11 +88,13 @@ export async function sendNoRosDebugCoordination(data: any) {
 
 export function sendNoRosDebugFineTuning(data: any) {
   const position = Number(data?.position || 0);
-  // 调试模式固定按一号臂的 V2 轴号模拟（旋转=1 / 摆动=2 / 伸缩=4），臂级 21（压力/IMU 共用）
+  const unitId = Number(data?.unit_id || 32);
+  const armIndex = Math.max(1, Math.min(5, unitId >= 1 && unitId <= 5 ? unitId : Math.floor(unitId / 32) || 1));
+  // 按当前业务 unit_id 映射到对应机械臂的 V2 轴号，避免切换机械臂后模拟反馈串到一号臂。
   const feedbackDeviceMap: Record<string, number> = {
-    rotation: axisDeviceId(1, "rotation"),
-    swing: axisDeviceId(1, "swing"),
-    telescopic: axisDeviceId(1, "telescopic"),
+    rotation: axisDeviceId(armIndex, "rotation"),
+    swing: axisDeviceId(armIndex, "swing"),
+    telescopic: axisDeviceId(armIndex, "telescopic"),
   };
 
   return mockSuccess(
@@ -103,7 +111,7 @@ export function sendNoRosDebugFineTuning(data: any) {
         type: "pressure",
       },
       {
-        device_id: armLevelDeviceId(1),
+        device_id: armLevelDeviceId(armIndex),
         swing_angle: data?.parameter_name === "swing" ? position : Number((position * 0.3).toFixed(2)),
         rotation_angle: data?.parameter_name === "rotation" ? position : Number((position * 0.2).toFixed(2)),
         x: Number((10 + position * 0.05).toFixed(2)),

@@ -11,11 +11,38 @@
 
 ---
 
+## 2026-10-28（模块选择与微调切换流程调整）
+
+- 模块管理页恢复为只选择模块坐标，检查登记信息后导航；机械臂选择、握手和图纸下发统一放到微调页弹窗中。
+- 首次弹窗可多选 1~5 台机械臂和一张图纸，先以 `unit_ids` 数组调用 `/module/` 完成批量确认，再为确认成功的每台机械臂调用 `/coordination/send` 下发同一张图纸。失败保留弹窗；重新下发当前机械臂图纸时不重复本次已成功的模块确认。
+- 微调主页面常驻机械臂切换入口和图纸下发入口，只在本次确认成功的机械臂之间切换；切换机械臂不会再次弹出选择框，页面会恢复当前会话内各自的图纸、三视图和微调状态。请求中禁止切换目标，压力/IMU 与轴反馈按当前机械臂匹配。
+- 业务命名、ROS `[100, seg, arm]` 及成功/失败回执不变；后端批量确认能力保留。此前“模块页多选机械臂”的界面安排作为历史记录，由本条取代。
+- 验证：前端 `npm run build` 与 `git diff --check` 已通过；无 ROS 模拟不能证明 rosbridge、ROS 节点或真机/CAN 已联调。操作顺序见《ROS_MES_前后端ROS接口清单_三轴版_V2.1》§6.3。
+
+---
+
+## 2026-10-28（SQLite 启动数据库修复）
+
+- 修复后端启动时报 `sqlite3.DatabaseError: database disk image is malformed`：仓库误跟踪的 `ros_database.db-wal`、`ros_database.db-shm` 与本地数据库主文件不一致，已移除版本控制并加入 `.gitignore`。
+- 保留并核验主数据库 `ros_database.db`，`PRAGMA integrity_check` 返回 `ok`；当前本地数据为 `Module_ID=17`、`Unit_ID=32/64/96`。
+- 修正部署模板 `DATABASE_URL`，从 `mes_web/ros_mes_hou/.env` 使用 `sqlite:///../../ros_database.db` 指向仓库根数据库。
+
+---
+
+## 2026-10-28（模块确认协议分层调整）
+
+- 模块确认前后端业务层与 ROS 下行层分离（已完成）
+  - 业务接口继续使用现有 `module_id`、`device_id`、`unit_id/unit_ids` 字段，移除现场不使用的 `station`；当时页面为先选模块和多个机械臂、后端逐个确认（该页面安排已被同日“模块选择与微调切换流程调整”取代）。
+  - 后端新增显式 `ROS_MODULE_SEG_MAP` 配置，用于 `module_id → seg`；禁止把业务模块号直接猜作 ROS `seg`，缺少映射时拒绝下发。
+  - 后端根据机械臂 `Unit_ID` 映射 ROS `arm=1~5`，向 `/control/module_cmd` 发送 `IntCmd`：`module_id` 原样透传、ROS `device_id=0`、`position=[100, seg, arm]`。
+  - 成功/失败回执契约保持不变：成功 `/hardware/module_confirm_success` 的 `position=[100]`，失败 `/hardware/web_module_cmd` 的 `position=[1]`；模块号按业务 `module_id` 匹配。
+  - 默认种子代码包含五臂 `Unit_ID=32/64/96/128/160`，部署数据库仍需实际核对；详见《ROS_MES_前后端ROS接口清单_三轴版_V2.1》§6、§7.2。
+
 ## 2026-10-25（八）
 
 - 伸缩轴单位契约定稿：**话题边界两向均为 mm，后端零换算**（51 passed 全绿）
-  - 经过：ROS 端负责人先口头说"单位 0.01mm"，我方一度按"话题线上 0.01mm"实现（下发 ×100 / 反馈 position_mm）；随后 ROS 端推送 3ed42f3《更新伸缩杆执行层逻辑》，核实 `TelescopicCmd.msg` 注释与节点源码后确认：**0.01mm 是 CAN/下位机层字段单位，ROS 节点内部完成换算，话题边界（下发 /control/adjust_telescopic_cmd、反馈 /hardware/telescope_feedback）两向均为 mm**
-  - 结论：与前后端既有语义（伸缩 mm）天然一致，撤销我方 ×100 / position_mm 预实现；**MM_PER_REV 参数废弃**（ROS 节点不再做 mm↔角度换算）；前端 FineTuningPage 的 position_mm 优先逻辑保留为无害兼容（字段暂无则回退 position）
+  - 经过：ROS 端负责人先口头说"单位 0.01mm"，前端一度按"话题线上 0.01mm"实现（下发 ×100 / 反馈 position_mm）；随后 ROS 端推送 3ed42f3《更新伸缩杆执行层逻辑》，核实 `TelescopicCmd.msg` 注释与节点源码后确认：**0.01mm 是 CAN/下位机层字段单位，ROS 节点内部完成换算，话题边界（下发 /control/adjust_telescopic_cmd、反馈 /hardware/telescope_feedback）两向均为 mm**
+  - 结论：与前后端既有语义（伸缩 mm）天然一致，撤销 ×100 / position_mm 预实现；**MM_PER_REV 参数废弃**（ROS 节点不再做 mm↔角度换算）；前端 FineTuningPage 的 position_mm 优先逻辑保留为无害兼容（字段暂无则回退 position）
   - ROS 端同步变化：telescopic_node 增加基准保护（首帧反馈到达前拒绝增量累加）；0~30mm 软限位节点侧执行；超位回执 CmdAck（后端已订阅转发）
   - 交接：伸缩下发/显示今晚联调直接按 mm，无需任何换算
 

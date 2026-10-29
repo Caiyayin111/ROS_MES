@@ -139,6 +139,8 @@ export function createModule(data: any) {
 	return request<any, ApiResponse<any>>({
 		url: '/module/',
 		method: 'post',
+		// 单臂确认可能包含现场上电等待窗口（后端默认 35s），避免 15s 客户端超时。
+		timeout: Math.max(40000, (Array.isArray(data?.unit_ids) ? data.unit_ids.length : 1) * 40000),
 		data
 	});
 }
