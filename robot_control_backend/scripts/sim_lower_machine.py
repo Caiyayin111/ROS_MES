@@ -31,6 +31,7 @@ from robot_control_backend.msg import (
     Feedback,
     GyroFeedback,
     IntCmd,
+    ModuleStatus,
     SegAssign,
     SegConfirm,
     SensorCmd,
@@ -79,6 +80,7 @@ class LowerMachineSimulator:
 
         # 会话状态
         self.assigned_seg = None
+        self.assigned_arm = None
         self.announced = False
         self.module_id = int(os.environ.get("CAN_DEFAULT_SEG", "0"))
         self.pressure_enabled = {axis: False for axis in ARM_SENSOR_AXES}
@@ -106,13 +108,17 @@ class LowerMachineSimulator:
             os.environ['ROS_TOPIC_VACUUM_LOSS'], VacuumLoss, queue_size=10)
         self.pub_cmd_ack = rospy.Publisher(
             os.environ['ROS_TOPIC_CMD_ACK'], CmdAck, queue_size=10)
+        self.pub_module_status = rospy.Publisher(
+            os.environ['ROS_TOPIC_MODULE_STATUS'], ModuleStatus, queue_size=10)
 
         # ---- 订阅 ----
         rospy.Subscriber(os.environ['ROS_TOPIC_ARM_CMD_VEL'], IntCmd, self.on_arm_cmd)
         rospy.Subscriber(os.environ['ROS_TOPIC_SEG_ASSIGN'], SegAssign, self.on_seg_assign)
         rospy.Subscriber(os.environ['ROS_TOPIC_SEG_BIND'], IntCmd, self.on_seg_bind)
-        # 收到新的模块确认请求时，模拟该工位重新上电，恢复未编号宣告
+        # 收到新的模块确认请求时，模拟该臂重新上电，恢复未编号宣告
         rospy.Subscriber(os.environ['ROS_TOPIC_MODULE_CMD'], IntCmd, self.on_module_cmd)
+        # 状态查询：回复电机掩码/模块状态（模拟三电机全部存在且就绪）
+        rospy.Subscriber(os.environ['ROS_TOPIC_MODULE_STATUS_QUERY'], IntCmd, self.on_status_query)
         rospy.Subscriber(os.environ['ROS_TOPIC_FRONTEND_POINTCLOUD'], String,
                          self.on_drawing_path)
 
@@ -178,21 +184,50 @@ class LowerMachineSimulator:
 
     # ===================== 会话握手 =====================
     def on_seg_assign(self, msg):
-        confirm = SegConfirm()
-        confirm.header = Header(stamp=rospy.Time.now())
-        confirm.uid56 = msg.target_uid56
-        confirm.seg = msg.seg
-        confirm.result = 0
-        self.pub_confirm.publish(confirm)
+        # 新固件：绑定成功后回两帧——组号确认（arm=0 标记）+ 臂位确认（arm/axis_base 有效）
+        seg_confirm = SegConfirm()
+        seg_confirm.header = Header(stamp=rospy.Time.now())
+        seg_confirm.uid56 = msg.target_uid56
+        seg_confirm.seg = msg.seg
+        seg_confirm.result = 0
+        seg_confirm.arm = 0
+        seg_confirm.axis_base = 0
+        arm_confirm = SegConfirm()
+        arm_confirm.header = seg_confirm.header
+        arm_confirm.uid56 = msg.target_uid56
+        arm_confirm.seg = 15            # 无效占位
+        arm_confirm.result = 0
+        arm_confirm.arm = msg.arm
+        arm_confirm.axis_base = (int(msg.arm) - 1) * 3 + 1
+        self.pub_confirm.publish(seg_confirm)
+        self.pub_confirm.publish(arm_confirm)
         with self._lock:
             self.assigned_seg = int(msg.seg)
+            self.assigned_arm = int(msg.arm)
             self.module_id = int(msg.seg)
-        rospy.loginfo("🤝 模拟下位机：收到 SEG 分配 %d（Seq=%d），已回确认",
-                      msg.seg, msg.seq)
+        rospy.loginfo("🤝 模拟下位机：收到绑定 SEG=%d ARM=%d，已回组号+臂位双确认",
+                      msg.seg, msg.arm)
+
+    def on_status_query(self, msg):
+        if self.assigned_seg is None:
+            return
+        m = ModuleStatus()
+        m.header = Header(stamp=rospy.Time.now())
+        m.module_id = self.assigned_seg & 0xFF
+        m.seg = self.assigned_seg & 0xFF
+        m.arm = self.assigned_arm & 0xFF
+        m.axis_base = (self.assigned_arm - 1) * 3 + 1
+        m.exist_mask = 0x07
+        m.ready_mask = 0x07
+        m.module_state = 0x03           # 已绑定 + 允许运动
+        m.token = int(msg.position[0]) & 0xFFFF if msg.position else 0
+        self.pub_module_status.publish(m)
+        rospy.loginfo("📋 模拟下位机：回复状态查询 Token=0x%04X", m.token)
 
     def on_module_cmd(self, msg):
         with self._lock:
             self.assigned_seg = None
+            self.assigned_arm = None
         rospy.loginfo("🔌 模拟下位机：收到模块确认请求 position=%s → 模拟重新上电，恢复宣告",
                       list(msg.position))
 

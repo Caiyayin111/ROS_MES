@@ -30,6 +30,7 @@ from robot_control_backend.msg import (
     UidAnnounce,
     SegAssign,
     SegConfirm,
+    ModuleStatus,
 )
 
 
@@ -63,10 +64,16 @@ class CANBusBridge:
     # ===== 会话式模块确认（领号段，独立协议，不走 V2 位域分派）=====
     UID_FRAME_BASE = 0x15BC0000        # 领号段基址（掩码匹配 0x15BC00xx）
     UID_FRAME_MASK = 0x1FFFFF00
-    UID_ASSIGN_ID = 0x15BC0010         # 分配应答（下行）
-    UID_CONFIRM_ID = 0x15BC0050        # 分配确认（上行）
+    UID_ASSIGN_ID = 0x15BC0020         # 组号+臂位绑定（下行）：UID56 + (SEG<<3)|(ARM-1)
+    UID_CONFIRM_ID = 0x15BC0050        # 组号确认（上行）：UID56 + (SEG<<4)|Result
+    UID_ARM_CONFIRM_ID = 0x15BC0060    # 臂位确认（上行，只收不发）：UID56 + (ARM<<4)|AxisBase
     UID_ANNOUNCE_BASE = 0x15BC0080     # 未编号宣告基址（上行，16 槽步长 4）
     UID_ANNOUNCE_MAX = 0x15BC00BC
+
+    # ===== 模块状态查询（绑定成功后复核用）=====
+    STATUS_QUERY_ID = 0x00000020       # 广播状态查询（下行）：DLC=4 Token 大端
+    STATUS_RESP_BASE = 0x00002060      # 状态应答基址：应答 ID = 0x00002060 + (SEG<<18)
+    STATUS_RESP_MASK = 0x1FC3FFFF      # 匹配时剔除 SEG 位（bit21~18）
 
     # 事件类型编码（写入 can_event_log.event_type）
     EVT_ARRIVE, EVT_STOP, EVT_AXIS_FAULT, EVT_HOME, EVT_LIMIT = 1, 2, 3, 4, 5
@@ -153,6 +160,9 @@ class CANBusBridge:
             os.environ['ROS_TOPIC_UID_ANNOUNCE'], UidAnnounce, queue_size=30)
         self.pub_seg_confirm = rospy.Publisher(
             os.environ['ROS_TOPIC_SEG_CONFIRM'], SegConfirm, queue_size=30)
+        # 模块状态查询应答（0x00002060 + SEG偏移）
+        self.pub_module_status = rospy.Publisher(
+            os.environ['ROS_TOPIC_MODULE_STATUS'], ModuleStatus, queue_size=30)
 
         # ---------- 订阅 ----------
         rospy.Subscriber(os.environ['ROS_TOPIC_ARM_CMD_VEL'], IntCmd, self.on_cmd_received)
@@ -160,6 +170,8 @@ class CANBusBridge:
         rospy.Subscriber(os.environ['ROS_TOPIC_SEG_ASSIGN'], SegAssign, self.on_seg_assign)
         # 握手成功后的 SEG 绑定（module_confirme_node 发布）：用于运动帧动态寻址
         rospy.Subscriber(os.environ['ROS_TOPIC_SEG_BIND'], IntCmd, self.on_seg_bind)
+        # 模块状态查询（广播 0x00000020，Token 大端 4 字节）
+        rospy.Subscriber(os.environ['ROS_TOPIC_MODULE_STATUS_QUERY'], IntCmd, self.on_status_query)
 
         # ---------- 心跳看门狗 ----------
         # 下位机暂未做心跳机制，看门狗定时器先注释掉（恢复时取消注释即可）
@@ -482,14 +494,22 @@ class CANBusBridge:
     # 会话式模块确认：领号段 CAN 帧桥接（唯一 CAN 出入口）
     # ======================================================================
     def _handle_uid_frame(self, can_id, data):
-        """解析领号段上行帧：未编号宣告 / 分配确认，转发给模块确认节点"""
+        """解析领号段上行帧：未编号宣告 / 组号确认 / 臂位确认，转发给模块确认节点"""
         if can_id == self.UID_CONFIRM_ID and len(data) >= 8:
-            # 分配确认：data[0..6]=Uid56，data[7]=(SEG<<4)|Result
+            # 组号确认：data[0..6]=Uid56，data[7]=(SEG<<4)|Result；arm=0 标记本帧为组号确认
             uid56 = int.from_bytes(data[0:7], 'big')
             seg, result = data[7] >> 4, data[7] & 0xF
             self.pub_seg_confirm.publish(SegConfirm(
-                header=self._header(), uid56=uid56, seg=seg, result=result))
-            rospy.loginfo("🤝 分配确认：UID56=%X SEG=%d Result=%d", uid56, seg, result)
+                header=self._header(), uid56=uid56, seg=seg, result=result, arm=0, axis_base=0))
+            rospy.loginfo("🤝 组号确认：UID56=%X SEG=%d Result=%d", uid56, seg, result)
+            return
+        if can_id == self.UID_ARM_CONFIRM_ID and len(data) >= 8:
+            # 臂位确认：data[0..6]=Uid56，data[7]=(ARM<<4)|AxisBase；seg=15 仅为无效占位
+            uid56 = int.from_bytes(data[0:7], 'big')
+            arm, axis_base = data[7] >> 4, data[7] & 0xF
+            self.pub_seg_confirm.publish(SegConfirm(
+                header=self._header(), uid56=uid56, seg=15, result=0, arm=arm, axis_base=axis_base))
+            rospy.loginfo("🤝 臂位确认：UID56=%X ARM=%d AxisBase=%d", uid56, arm, axis_base)
             return
         if self.UID_ANNOUNCE_BASE <= can_id <= self.UID_ANNOUNCE_MAX \
                 and (can_id - self.UID_ANNOUNCE_BASE) % 4 == 0 and len(data) >= 8:
@@ -501,15 +521,43 @@ class CANBusBridge:
             rospy.loginfo("📢 未编号宣告：槽%d 类型=0x%02X UID56=%X", slot, data[0], uid56)
 
     def on_seg_assign(self, msg):
-        """模块确认节点的分配请求 → 发分配帧 0x15BC0010（UID56 大端 7 字节 + (SEG<<4|Seq)）"""
-        seg, seq = int(msg.seg), int(msg.seq)
+        """模块确认节点的绑定请求 → 发绑定帧 0x15BC0020（UID56 大端 7 字节 + (SEG<<3)|(ARM-1)）"""
+        seg, arm = int(msg.seg), int(msg.arm)
         if not (0 <= seg <= 14):
-            rospy.logwarn("⚠️ 分配 SEG=%d 非法（0~14，15 仅用于领号），已丢弃", seg)
+            rospy.logwarn("⚠️ 绑定 SEG=%d 非法（0~14），已丢弃", seg)
+            return
+        if not (1 <= arm <= 5):
+            rospy.logwarn("⚠️ 绑定 ARM=%d 非法（1~5），已丢弃", arm)
             return
         uid56 = int(msg.target_uid56) & 0x00FFFFFFFFFFFFFF
-        data = uid56.to_bytes(7, 'big') + bytes([((seg & 0xF) << 4) | (seq & 0xF)])
+        data = uid56.to_bytes(7, 'big') + bytes([((seg & 0xF) << 3) | ((arm - 1) & 0x7)])
         if self._send_can_frame(self.UID_ASSIGN_ID, data):
-            rospy.loginfo("📤 分配应答 → UID56=%X SEG=%d Seq=%d", uid56, seg, seq)
+            rospy.loginfo("📤 组号+臂位绑定 → UID56=%X SEG=%d ARM=%d（起始AXIS=%d）",
+                          uid56, seg, arm, (arm - 1) * 3 + 1)
+
+    def on_status_query(self, msg):
+        """模块状态查询 → 广播帧 0x00000020（DLC=4，Token uint32 大端）；position=[token]"""
+        if not msg.position:
+            return
+        token = int(msg.position[0]) & 0xFFFFFFFF
+        if self._send_can_frame(self.STATUS_QUERY_ID, token.to_bytes(4, 'big')):
+            rospy.loginfo("🔎 模块状态查询 → 0x%08X Token=0x%08X", self.STATUS_QUERY_ID, token)
+
+    def _handle_status_resp(self, can_id, data):
+        """状态应答 0x00002060+(SEG<<18)：解析电机掩码/模块状态并转发 ModuleStatus"""
+        if len(data) < 8:
+            rospy.logwarn_throttle(10.0, "⚠️ 状态应答帧长度不足（DLC=%d），跳过", len(data))
+            return
+        frame_seg = (can_id >> 18) & 0xF
+        m = ModuleStatus(header=self._header(), module_id=frame_seg,
+                         seg=data[1], arm=data[2] >> 4, axis_base=data[2] & 0xF,
+                         exist_mask=data[3], ready_mask=data[4], module_state=data[5],
+                         token=struct.unpack_from('>H', data, 6)[0])
+        self.pub_module_status.publish(m)
+        rospy.loginfo("📋 状态应答 SEG=%d（数据段SEG=%s ARM=%d AxisBase=%d）"
+                      "存在=0x%02X 就绪=0x%02X 状态=0x%02X Token=0x%04X",
+                      frame_seg, "未绑定" if m.seg == 0xFF else str(m.seg),
+                      m.arm, m.axis_base, m.exist_mask, m.ready_mask, m.module_state, m.token)
 
     def on_seg_bind(self, msg):
         """握手成功后的 SEG 绑定：业务 module_id → SEG。
@@ -533,6 +581,10 @@ class CANBusBridge:
         # 领号段（0x15BC00xx）：会话式模块确认协议，独立处理，不走 V2 位域分派
         if (msg.arbitration_id & self.UID_FRAME_MASK) == self.UID_FRAME_BASE:
             self._handle_uid_frame(msg.arbitration_id, bytes(msg.data))
+            return
+        # 模块状态应答（0x00002060 + SEG<<18）：先于 V2 位域分派拦截
+        if (msg.arbitration_id & self.STATUS_RESP_MASK) == self.STATUS_RESP_BASE:
+            self._handle_status_resp(msg.arbitration_id, bytes(msg.data))
             return
         f = self._parse_id(msg.arbitration_id)
         grp, seg, node, axis, direction, mnum, data = (
