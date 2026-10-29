@@ -357,7 +357,7 @@ A:
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
 | API_STR | API 前缀 | /api |
-| DATABASE_URL | SQLite 数据库路径 | sqlite:///../ros_database.db |
+| DATABASE_URL | SQLite 数据库路径（相对**后端启动时的工作目录**解析，须在 `mes_web/ros_mes_hou` 下启动 uvicorn，向上两级才是仓库根） | sqlite:///../../ros_database.db |
 | BACKEND_CORS_ORIGINS | CORS 允许的源 | * |
 | ROSBRIDGE_URL | rosbridge WebSocket 地址 | ws://127.0.0.1:9010 |
 | ROS_VERSION | ROS 版本适配（1/ros1 或 2/ros2） | 1 |

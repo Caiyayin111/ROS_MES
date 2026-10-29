@@ -11,6 +11,17 @@
 
 ---
 
+## 2026-10-29（部署文档数据库路径修正 + 工作区残留清理）
+
+- 修正 `deploy/README_DEPLOY.md` §6 配置表中 `DATABASE_URL` 默认值：`sqlite:///../ros_database.db` → `sqlite:///../../ros_database.db`，与 `deploy/config/backend.env` 对齐；并在说明列注明该相对路径按**后端启动时的工作目录**解析，必须在 `mes_web/ros_mes_hou` 下启动 uvicorn（已完成）
+  - 背景：旧值少一级，照表格手填 `mes_web/ros_mes_hou/.env` 时会连到 `mes_web/ros_database.db`（空库），`/api/device/` 返回空数组，模块管理页随即报"该坐标模块尚未在设备信息管理中登记，请先添加模块"——ROS 侧联调遇到的就是这个现象，不是前端代码未更新
+  - 判别依据：`ModuleManagement.vue:128-134` 用 `DeviceAddress === x*16+y` 匹配设备（(1,1) → 17），卡片徽标显示"等待选择已登记模块"即表示设备列表无此行；`crud/device.py:6-7` 只返回 `del_flag=0` 的行
+- 清理工作区残留（两者均被 `.gitignore` 忽略，不产生提交内容）：删除 `e1bfe9e` 目录重构后遗留的空目录 `ROS_MES/ros_mes_hou/`，以及旧 `DATABASE_URL` 相对路径误连产生的 0 字节空库 `mes_web/ros_database.db`；正式库仍为仓库根 `ros_database.db`（110,592 B，`Module_ID=17`、`Unit_ID=32/64/96`）（已完成）
+- ??? ROS 侧若已按旧表格生成过 `mes_web/ros_database.db`，需自行删除该空文件并把 `.env` 的 `DATABASE_URL` 改为 `sqlite:///../../ros_database.db`，否则后端仍连空库；脚本方式可直接在 `mes_web/ros_mes_hou` 下执行 `python sqlite_create.py`（幂等，会补 `Module_ID=17` 与各臂 Unit/传感器）
+- 验证：仅文档修改与工作区清理，无代码改动；`git diff --check` 通过
+
+---
+
 ## 2026-10-28（模块选择与微调切换流程调整）
 
 - 模块管理页恢复为只选择模块坐标，检查登记信息后导航；机械臂选择、握手和图纸下发统一放到微调页弹窗中。
